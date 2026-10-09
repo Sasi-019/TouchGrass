@@ -1,21 +1,48 @@
+
+
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import Base, engine
-from . import models
+from .database import init_db, check_database_connection
 
 from .routers.auth import router as auth_router
 from .routers.profile import router as profile_router
 from .routers.activities import router as activities_router
 from .routers.agent import router as agent_router
+from .routers.voice import router as voice_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("\n========================================")
+    print("Starting TouchGrass backend...")
+    print("========================================")
+
+    try:
+        init_db()
+
+        if check_database_connection():
+            print("PostgreSQL: connected")
+        else:
+            print("PostgreSQL: connection failed")
+
+    except Exception as exc:
+        print("Database initialization error:")
+        print(type(exc).__name__, str(exc))
+
+    yield
+
+    print("TouchGrass backend shutting down...")
 
 
-app = FastAPI(title="TouchGrass API")
+app = FastAPI(
+    title="TouchGrass API",
+    description="Personalized real-world activity agent",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
-
-# -------------------------
-# CORS
-# -------------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,32 +56,38 @@ app.add_middleware(
 )
 
 
-# -------------------------
-# Routers
-# -------------------------
+# ============================================================
+# ROUTERS
+# ============================================================
 
 app.include_router(auth_router)
 app.include_router(profile_router)
 app.include_router(activities_router)
 app.include_router(agent_router)
+app.include_router(voice_router)
 
-
-# -------------------------
-# Database
-# -------------------------
-
-Base.metadata.create_all(bind=engine)
-
-
-# -------------------------
-# Basic routes
-# -------------------------
+# ============================================================
+# BASIC ENDPOINTS
+# ============================================================
 
 @app.get("/")
 def root():
-    return {"message": "TouchGrass backend is running"}
+    return {
+        "message": "TouchGrass API is running",
+        "status": "ok",
+    }
 
 
-@app.get("/db-test")
-def database_test():
-    return {"message": "Database connection is configured"}
+@app.get("/health")
+def health():
+    database_status = check_database_connection()
+
+    return {
+        "status": "healthy",
+        "database": (
+            "connected"
+            if database_status
+            else "disconnected"
+        ),
+    }
+

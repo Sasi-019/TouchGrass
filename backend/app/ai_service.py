@@ -1,122 +1,367 @@
 import json
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 from groq import Groq
 
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY is not set")
+# ============================================================
+# GROQ CONFIGURATION
+# ============================================================
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
     "openai/gpt-oss-20b",
 )
 
+GROQ_STT_MODEL = os.getenv(
+    "GROQ_STT_MODEL",
+    "whisper-large-v3-turbo",
+)
+
+if not GROQ_API_KEY:
+    raise RuntimeError(
+        "GROQ_API_KEY is not set in backend/.env"
+    )
+
 client = Groq(api_key=GROQ_API_KEY)
 
 
-SYSTEM_PROMPT = """
-You are the profile-understanding component of TouchGrass.
+# ============================================================
+# PROFILE NORMALIZATION
+# ============================================================
 
-TouchGrass is a real-world activity agent that helps users spend
-less passive screen time and do meaningful offline activities.
+PROFILE_SYSTEM_PROMPT = """
+You are the profile-understanding engine for TouchGrass.
 
-Your task is to convert a user's natural-language profile answers
-into a structured JSON profile.
+TouchGrass is an AI system that helps people discover meaningful
+real-world activities based on their personality, interests,
+available time, curiosity, preferences, and constraints.
 
-Important rules:
+The user answers conversational questions.
 
-1. Extract genuine interests from the user's answers.
-2. Do not invent interests that the user did not imply.
-3. Give each interest a strength from 0.0 to 1.0.
-4. Identify things the user wants to do more often.
-5. Identify things the user is curious about.
-6. Preserve their preferred experience types.
-7. Preserve dislikes and constraints.
-8. Preserve their typical available time.
-9. Keep the result concise.
-10. Return ONLY valid JSON.
-11. Do not include markdown.
-12. Do not include explanations outside the JSON.
+Your job is to transform those answers into a structured profile.
 
-Required JSON format:
+Return ONLY valid JSON.
+
+The JSON must contain:
 
 {
-  "interests": [
-    {
-      "name": "string",
-      "strength": 0.0
-    }
-  ],
-  "wants_more_of": [],
-  "curiosity": [],
-  "experience_preferences": [],
-  "dislikes": [],
-  "constraints": [],
-  "typical_free_time": "string"
+    "interests": [],
+    "wants_more_of": [],
+    "curiosity": [],
+    "experience_preferences": [],
+    "dislikes": [],
+    "constraints": [],
+    "typical_free_time": "",
+    "adventure_level": ""
 }
+
+Rules:
+
+1. interests:
+   Extract meaningful interests from the user's answers.
+   Examples:
+   photography, music, nature, technology, food, art,
+   fitness, reading, animals, history.
+
+2. wants_more_of:
+   Identify experiences the user wants more of.
+   Examples:
+   social connection, creativity, adventure, exercise,
+   learning, relaxation, exploration.
+
+3. curiosity:
+   Extract subjects or experiences the user is curious about.
+
+4. experience_preferences:
+   Capture preferred activity styles.
+   Examples:
+   solo, friends, outdoors, indoors, creative, social,
+   quiet, spontaneous, structured.
+
+5. dislikes:
+   Extract things the user explicitly dislikes.
+
+6. constraints:
+   Extract practical limitations.
+   Examples:
+   limited budget, limited time, transportation,
+   crowds, weather sensitivity.
+
+7. typical_free_time:
+   Preserve the user's typical available time.
+
+8. adventure_level:
+   Classify as one of:
+   "low", "moderate", "high"
+
+Do not invent information that is not supported by the answers.
+
+Keep the profile concise and useful for recommending
+real-world activities.
 """
 
 
-def normalize_profile(raw_profile: dict) -> dict:
+def extract_json(text: str) -> dict[str, Any]:
+    """
+    Extract a JSON object from an LLM response.
+    """
 
-    user_prompt = f"""
-Convert this user's answers into the required TouchGrass profile.
+    text = text.strip()
 
-USER ANSWERS:
+    # Remove markdown code fences if the model adds them.
+    if text.startswith("```"):
+        lines = text.splitlines()
 
-Interests:
-{raw_profile.get("interests", [])}
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
 
-Wants more of:
-{raw_profile.get("wants_more_of", [])}
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
 
-Curiosity:
-{raw_profile.get("curiosity", [])}
+        text = "\n".join(lines).strip()
 
-Experience preferences:
-{raw_profile.get("experience_preferences", [])}
+    try:
+        parsed = json.loads(text)
 
-Dislikes:
-{raw_profile.get("dislikes", [])}
+    except json.JSONDecodeError:
 
-Constraints:
-{raw_profile.get("constraints", [])}
+        start = text.find("{")
+        end = text.rfind("}")
 
-Typical free time:
-{raw_profile.get("typical_free_time", "")}
-"""
+        if start == -1 or end == -1 or end <= start:
+            raise RuntimeError(
+                "Groq returned invalid JSON."
+            )
 
-    response = client.chat.completions.create(
+        try:
+            parsed = json.loads(
+                text[start : end + 1]
+            )
+
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Groq returned invalid JSON: {exc}"
+            )
+
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            "Groq JSON response was not an object."
+        )
+
+    return parsed
+
+
+# ============================================================
+# GENERIC GROQ CHAT
+# ============================================================
+
+def _chat_completion(
+    system_prompt: str,
+    user_prompt: str,
+    max_completion_tokens: int = 800,
+    temperature: float = 0.2,
+) -> str:
+
+    completion = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": system_prompt,
             },
             {
                 "role": "user",
                 "content": user_prompt,
             },
         ],
-        temperature=0.2,
-        max_tokens=600,
-        response_format={
-            "type": "json_object"
-        },
+        temperature=temperature,
+        max_completion_tokens=max_completion_tokens,
+        include_reasoning=False,
     )
 
-    content = response.choices[0].message.content.strip()
+    if not completion.choices:
+        raise RuntimeError(
+            "Groq returned no completion choices."
+        )
 
-    try:
-        profile = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"Groq returned invalid JSON: {content}"
-        ) from exc
+    message = completion.choices[0].message
+
+    content = message.content
+
+    if not content:
+        raise RuntimeError(
+            "Groq returned empty content."
+        )
+
+    return content.strip()
+
+
+def generate_json(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.2,
+    max_tokens: int = 800,
+) -> dict[str, Any]:
+
+    content = _chat_completion(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_completion_tokens=max_tokens,
+        temperature=temperature,
+    )
+
+    return extract_json(content)
+
+
+def generate_text(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.7,
+    max_tokens: int = 800,
+) -> str:
+
+    return _chat_completion(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_completion_tokens=max_tokens,
+        temperature=temperature,
+    )
+
+
+# ============================================================
+# PROFILE FUNCTIONS
+# ============================================================
+
+def normalize_profile(
+    answers: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Convert raw conversational profile answers
+    into structured profile data.
+    """
+
+    user_prompt = f"""
+Here are the user's profile discovery answers:
+
+{json.dumps(answers, ensure_ascii=False, indent=2)}
+
+Convert these answers into the required structured
+TouchGrass profile.
+
+Return ONLY JSON.
+"""
+
+    profile = generate_json(
+        system_prompt=PROFILE_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        temperature=0.2,
+        max_tokens=700,
+    )
+
+    return clean_profile(profile)
+
+
+def clean_profile(
+    profile: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Ensure the normalized profile has the expected
+    structure and safe value types.
+    """
+
+    list_fields = [
+        "wants_more_of",
+        "curiosity",
+        "experience_preferences",
+        "dislikes",
+        "constraints",
+    ]
+
+    for field in list_fields:
+
+        value = profile.get(field)
+
+        if value is None:
+            profile[field] = []
+
+        elif isinstance(value, str):
+            profile[field] = [value]
+
+        elif not isinstance(value, list):
+            profile[field] = []
+
+    interests = profile.get("interests")
+
+    if interests is None:
+        profile["interests"] = []
+
+    elif not isinstance(interests, list):
+        profile["interests"] = []
+
+    profile["typical_free_time"] = (
+        profile.get("typical_free_time")
+        or ""
+    )
+
+    adventure_level = profile.get(
+        "adventure_level"
+    )
+
+    if adventure_level not in {
+        "low",
+        "moderate",
+        "high",
+    }:
+
+        profile["adventure_level"] = "moderate"
 
     return profile
+
+
+# ============================================================
+# SPEECH TO TEXT
+# ============================================================
+
+def transcribe_audio(
+    audio_bytes: bytes,
+    filename: str = "voice.webm",
+) -> str:
+    """
+    Convert uploaded audio into text using
+    Groq Whisper.
+    """
+
+    if not audio_bytes:
+        raise ValueError(
+            "Audio file is empty."
+        )
+
+    transcription = client.audio.transcriptions.create(
+        file=(
+            filename,
+            audio_bytes,
+        ),
+        model=GROQ_STT_MODEL,
+        response_format="json",
+        temperature=0.0,
+    )
+
+    text = getattr(
+        transcription,
+        "text",
+        None,
+    )
+
+    if not text:
+        raise RuntimeError(
+            "Speech-to-text returned empty text."
+        )
+
+    return text.strip()

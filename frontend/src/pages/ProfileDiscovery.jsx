@@ -1,40 +1,33 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../services/api";
+import { normalizeProfile, saveProfile } from "../services/api";
 
 const questions = [
   {
-    id: "interests",
-    type: "text",
+    id: "free_time",
     title: "What do you enjoy doing when you have free time?",
-    subtitle:
-      "Tell us naturally. You can mention multiple things — there are no wrong answers.",
     placeholder:
-      "For example: photography, reading, coding, music, walking...",
+      "For example: photography, reading, gaming, walking, music...",
+    type: "text",
   },
   {
-    id: "wants_more_of",
-    type: "text",
+    id: "wants_more",
     title: "What do you wish you did more often?",
-    subtitle:
-      "Think about things you would like to make more time for.",
     placeholder:
-      "For example: exercise, spending time outdoors, learning...",
+      "For example: exercise more, spend time outside, meet people...",
+    type: "text",
   },
   {
     id: "curiosity",
-    type: "text",
-    title: "What have you always wanted to try?",
-    subtitle:
-      "It can be something completely new or something you've been curious about.",
+    title: "What have you always wanted to try or learn?",
     placeholder:
-      "For example: painting, gardening, photography walks...",
+      "For example: gardening, cooking, painting, bird watching...",
+    type: "text",
   },
   {
     id: "experience_preferences",
-    type: "multi",
     title: "What kind of experiences sound good to you?",
-    subtitle: "Choose as many as you like.",
+    type: "multi",
     options: [
       "Learn",
       "Create",
@@ -45,11 +38,9 @@ const questions = [
     ],
   },
   {
-    id: "typical_free_time",
-    type: "single",
+    id: "free_time_duration",
     title: "How much free time do you usually have?",
-    subtitle:
-      "This helps TouchGrass suggest challenges you can realistically complete.",
+    type: "single",
     options: [
       "10–20 minutes",
       "20–40 minutes",
@@ -59,337 +50,314 @@ const questions = [
   },
   {
     id: "dislikes",
-    type: "text",
-    title: "Is there anything you dislike or want us to avoid?",
-    subtitle:
-      "Tell us about activities, environments, or situations you would rather avoid.",
+    title: "Is there anything you dislike or want to avoid?",
     placeholder:
-      "For example: crowded places, long travel, noisy environments...",
+      "For example: crowded places, long travel, intense exercise...",
+    type: "text",
+  },
+  {
+    id: "adventure_level",
+    title: "How adventurous should TouchGrass be?",
+    type: "single",
+    options: [
+      "Keep it comfortable",
+      "Moderate",
+      "Surprise me",
+    ],
   },
 ];
 
-function ProfileDiscovery() {
+export default function ProfileDiscovery() {
   const navigate = useNavigate();
 
-  const [currentQuestion, setCurrentQuestion] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const [answers, setAnswers] = useState({
-    interests: "",
-    wants_more_of: "",
+    free_time: "",
+    wants_more: "",
     curiosity: "",
     experience_preferences: [],
-    typical_free_time: "",
+    free_time_duration: "",
     dislikes: "",
+    adventure_level: "",
   });
 
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const question = questions[currentQuestion];
+  const question = questions[currentIndex];
 
-  const progress =
-    ((currentQuestion + 1) / questions.length) * 100;
-
-  const handleTextChange = (value) => {
+  const updateAnswer = (value) => {
     setAnswers((previous) => ({
       ...previous,
       [question.id]: value,
     }));
   };
 
-  const togglePreference = (option) => {
+  const toggleExperience = (option) => {
     setAnswers((previous) => {
       const current = previous.experience_preferences;
 
-      if (current.includes(option)) {
+      if (current.includes(option.toLowerCase())) {
         return {
           ...previous,
           experience_preferences: current.filter(
-            (item) => item !== option
+            (item) => item !== option.toLowerCase()
           ),
         };
       }
 
       return {
         ...previous,
-        experience_preferences: [...current, option],
+        experience_preferences: [
+          ...current,
+          option.toLowerCase(),
+        ],
       };
     });
   };
 
-  const selectTime = (option) => {
-    setAnswers((previous) => ({
-      ...previous,
-      typical_free_time: option,
-    }));
-  };
-
   const canContinue = () => {
+    const value = answers[question.id];
+
     if (question.type === "multi") {
-      return answers.experience_preferences.length > 0;
+      return value.length > 0;
     }
 
-    if (question.type === "single") {
-      return answers.typical_free_time !== "";
-    }
-
-    return answers[question.id].trim() !== "";
+    return String(value || "").trim().length > 0;
   };
 
-  const saveProfile = async () => {
-    setSaving(true);
+  const goNext = async () => {
+    setError("");
+
+    if (!canContinue()) {
+      setError("Please answer this question before continuing.");
+      return;
+    }
+
+    if (currentIndex < questions.length - 1) {
+      setCurrentIndex((index) => index + 1);
+      return;
+    }
+
+    await finishProfile();
+  };
+
+  const goBack = () => {
+    setError("");
+
+    if (currentIndex > 0) {
+      setCurrentIndex((index) => index - 1);
+    }
+  };
+
+  const finishProfile = async () => {
+    setLoading(true);
     setError("");
 
     try {
-      const profilePayload = {
-        /*
-         * For now we preserve the user's natural-language answer.
-         * Qwen will normalize this later.
-         */
-        interests: answers.interests.trim()
-          ? [{ raw: answers.interests.trim() }]
-          : [],
+      // Step 1:
+      // Send natural-language answers to Groq.
+      const normalized = await normalizeProfile(answers);
 
-        wants_more_of: answers.wants_more_of.trim()
-          ? [answers.wants_more_of.trim()]
-          : [],
+      console.log("AI normalized profile:", normalized);
 
-        curiosity: answers.curiosity.trim()
-          ? [answers.curiosity.trim()]
-          : [],
+      // Step 2:
+      // Save the structured profile in PostgreSQL.
+      const savedProfile = await saveProfile(normalized);
 
-        experience_preferences:
-          answers.experience_preferences,
+      console.log("Saved profile:", savedProfile);
 
-        dislikes: answers.dislikes.trim()
-          ? [answers.dislikes.trim()]
-          : [],
-
-        constraints: [],
-
-        typical_free_time:
-          answers.typical_free_time,
-      };
-
-      await api.post("/profile", profilePayload);
-
+      // Step 3:
+      // Continue to Home.
       navigate("/home");
     } catch (err) {
-      console.error(err);
+      console.error("Profile setup failed:", err);
 
-      if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
-      } else {
-        setError(
-          "We couldn't save your profile. Please try again."
-        );
-      }
+      const message =
+        err.response?.data?.detail ||
+        "Something went wrong while creating your profile.";
+
+      setError(message);
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const handleNext = async () => {
-    if (!canContinue()) return;
-
-    if (currentQuestion === questions.length - 1) {
-      await saveProfile();
-      return;
-    }
-
-    setCurrentQuestion((previous) => previous + 1);
-  };
-
-  const handleBack = () => {
-    if (currentQuestion === 0) {
-      navigate("/home");
-      return;
-    }
-
-    setCurrentQuestion((previous) => previous - 1);
-    setError("");
-  };
+  const progress =
+    ((currentIndex + 1) / questions.length) * 100;
 
   return (
-    <div className="min-h-screen bg-[#f3f7f0] px-5 py-8 text-[#1b4332]">
-      <div className="mx-auto flex min-h-[90vh] max-w-3xl flex-col">
+    <div className="min-h-screen bg-[#120b08] text-white flex items-center justify-center px-4 py-10">
+      <div className="w-full max-w-2xl">
 
         {/* Header */}
-        <header className="mb-10 flex items-center justify-between">
-          <button
-            onClick={() => navigate("/home")}
-            className="text-sm font-medium text-[#52796f] transition hover:text-[#1b4332]"
-          >
-            ← Back
-          </button>
-
-          <div className="text-sm font-semibold text-[#52796f]">
-            TouchGrass
+        <div className="mb-8 text-center">
+          <div className="inline-flex items-center gap-2 mb-4">
+            <div className="w-3 h-3 rounded-full bg-amber-500" />
+            <span className="text-amber-400 font-semibold tracking-wide">
+              TOUCHGRASS
+            </span>
           </div>
-        </header>
+
+          <h1 className="text-3xl md:text-4xl font-bold">
+            Let's get to know you
+          </h1>
+
+          <p className="text-gray-400 mt-3">
+            A few simple questions help TouchGrass understand
+            what kind of experiences you'll enjoy.
+          </p>
+        </div>
 
         {/* Progress */}
-        <div className="mb-10">
-          <div className="mb-3 flex items-center justify-between text-sm">
-            <span className="font-medium text-[#52796f]">
-              Getting to know you
+        <div className="mb-8">
+          <div className="flex justify-between text-sm text-gray-400 mb-2">
+            <span>
+              Question {currentIndex + 1} of {questions.length}
             </span>
 
-            <span className="text-[#6b7f72]">
-              {currentQuestion + 1} / {questions.length}
+            <span>
+              {Math.round(progress)}%
             </span>
           </div>
 
-          <div className="h-2 overflow-hidden rounded-full bg-[#dce8d7]">
+          <div className="h-2 rounded-full bg-white/10 overflow-hidden">
             <div
-              className="h-full rounded-full bg-[#52796f] transition-all duration-500"
+              className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
         </div>
 
-        {/* Main Card */}
-        <main className="flex flex-1 items-center justify-center">
-          <div className="w-full rounded-3xl border border-[#dce8d7] bg-white p-7 shadow-sm sm:p-10">
+        {/* Question Card */}
+        <div className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl p-6 md:p-8 shadow-2xl">
 
-            <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold uppercase tracking-wider text-[#6a994e]">
-                Let's discover your world
-              </p>
+          <div className="mb-7">
+            <p className="text-amber-400 text-sm font-medium mb-3">
+              GETTING TO KNOW YOU
+            </p>
 
-              <h1 className="text-3xl font-bold leading-tight text-[#1b4332] sm:text-4xl">
-                {question.title}
-              </h1>
-
-              <p className="mt-4 max-w-2xl text-base leading-7 text-[#52796f]">
-                {question.subtitle}
-              </p>
-            </div>
-
-            {/* Text Question */}
-            {question.type === "text" && (
-              <textarea
-                value={answers[question.id]}
-                onChange={(event) =>
-                  handleTextChange(event.target.value)
-                }
-                placeholder={question.placeholder}
-                rows={5}
-                autoFocus
-                className="w-full resize-none rounded-2xl border border-[#cddbc8] bg-[#f8fbf6] p-5 text-base text-[#1b4332] outline-none transition placeholder:text-[#91a496] focus:border-[#52796f] focus:ring-4 focus:ring-[#52796f]/10"
-              />
-            )}
-
-            {/* Multi Select */}
-            {question.type === "multi" && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {question.options.map((option) => {
-                  const selected =
-                    answers.experience_preferences.includes(option);
-
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => togglePreference(option)}
-                      className={`rounded-2xl border p-5 text-left font-medium transition ${
-                        selected
-                          ? "border-[#52796f] bg-[#e3eee0] text-[#1b4332] shadow-sm"
-                          : "border-[#d5e1d1] bg-[#f8fbf6] text-[#52796f] hover:border-[#9db39a] hover:bg-[#f0f6ed]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span>{option}</span>
-
-                        {selected && (
-                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#52796f] text-sm text-white">
-                            ✓
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Single Select */}
-            {question.type === "single" && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {question.options.map((option) => {
-                  const selected =
-                    answers.typical_free_time === option;
-
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => selectTime(option)}
-                      className={`rounded-2xl border p-5 text-left font-medium transition ${
-                        selected
-                          ? "border-[#52796f] bg-[#e3eee0] text-[#1b4332] shadow-sm"
-                          : "border-[#d5e1d1] bg-[#f8fbf6] text-[#52796f] hover:border-[#9db39a] hover:bg-[#f0f6ed]"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span>{option}</span>
-
-                        {selected && (
-                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#52796f] text-sm text-white">
-                            ✓
-                          </span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Error */}
-            {error && (
-              <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-
-            {/* Navigation */}
-            <div className="mt-10 flex items-center justify-between gap-4">
-              <button
-                type="button"
-                onClick={handleBack}
-                className="rounded-xl px-5 py-3 font-medium text-[#52796f] transition hover:bg-[#f0f6ed]"
-              >
-                Back
-              </button>
-
-              <button
-                type="button"
-                onClick={handleNext}
-                disabled={!canContinue() || saving}
-                className={`rounded-xl px-7 py-3 font-semibold text-white transition ${
-                  canContinue() && !saving
-                    ? "bg-[#31572c] shadow-sm hover:bg-[#1b4332]"
-                    : "cursor-not-allowed bg-[#a9b9a5]"
-                }`}
-              >
-                {saving
-                  ? "Saving..."
-                  : currentQuestion === questions.length - 1
-                    ? "Create my profile"
-                    : "Continue"}
-              </button>
-            </div>
+            <h2 className="text-2xl md:text-3xl font-semibold leading-tight">
+              {question.title}
+            </h2>
           </div>
-        </main>
 
-        {/* Footer hint */}
-        <p className="mt-8 text-center text-sm text-[#7a8f81]">
-          There are no right answers. Just tell TouchGrass what feels like you.
+          {/* Text Input */}
+          {question.type === "text" && (
+            <textarea
+              value={answers[question.id]}
+              onChange={(event) =>
+                updateAnswer(event.target.value)
+              }
+              placeholder={question.placeholder}
+              rows={5}
+              className="w-full rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-white placeholder-gray-500 outline-none resize-none focus:border-amber-500/60 focus:ring-2 focus:ring-amber-500/20 transition"
+              autoFocus
+            />
+          )}
+
+          {/* Multi Select */}
+          {question.type === "multi" && (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {question.options.map((option) => {
+                const selected =
+                  answers.experience_preferences.includes(
+                    option.toLowerCase()
+                  );
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => toggleExperience(option)}
+                    className={`rounded-2xl border px-4 py-4 text-sm font-medium transition ${
+                      selected
+                        ? "border-amber-500 bg-amber-500/20 text-amber-300"
+                        : "border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.08]"
+                    }`}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Single Select */}
+          {question.type === "single" && (
+            <div className="space-y-3">
+              {question.options.map((option) => {
+                const selected =
+                  answers[question.id] === option;
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => updateAnswer(option)}
+                    className={`w-full text-left rounded-2xl border px-5 py-4 transition ${
+                      selected
+                        ? "border-amber-500 bg-amber-500/20 text-amber-300"
+                        : "border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.08]"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span>{option}</span>
+
+                      {selected && (
+                        <span className="text-amber-400">
+                          ✓
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+
+          {/* Navigation */}
+          <div className="flex items-center justify-between mt-8">
+
+            <button
+              type="button"
+              onClick={goBack}
+              disabled={currentIndex === 0 || loading}
+              className="px-5 py-3 rounded-xl text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition"
+            >
+              ← Back
+            </button>
+
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={loading}
+              className="px-7 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-black font-semibold hover:from-amber-400 hover:to-orange-400 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg shadow-amber-500/10"
+            >
+              {loading
+                ? "Building your profile..."
+                : currentIndex === questions.length - 1
+                ? "Create my profile"
+                : "Continue →"}
+            </button>
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-gray-500 mt-6">
+          Your answers help TouchGrass personalize your
+          offline experiences.
         </p>
       </div>
     </div>
   );
 }
-
-export default ProfileDiscovery;

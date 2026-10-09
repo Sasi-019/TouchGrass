@@ -1,111 +1,113 @@
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-import bcrypt
 from dotenv import load_dotenv
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-# Load .env from the backend folder
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+from passlib.context import CryptContext
 
 
-# -------------------------
-# Password hashing
-# -------------------------
+load_dotenv()
+
+
+# ============================================================
+# PASSWORD HASHING
+# ============================================================
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+)
+
 
 def hash_password(password: str) -> str:
-    password_bytes = password.encode("utf-8")
-
-    if len(password_bytes) > 72:
-        raise ValueError(
-            "Password cannot be longer than 72 bytes"
-        )
-
-    hashed = bcrypt.hashpw(
-        password_bytes,
-        bcrypt.gensalt()
-    )
-
-    return hashed.decode("utf-8")
+    return pwd_context.hash(password)
 
 
 def verify_password(
     plain_password: str,
-    hashed_password: str
+    hashed_password: str,
 ) -> bool:
-
-    password_bytes = plain_password.encode("utf-8")
-    hashed_bytes = hashed_password.encode("utf-8")
-
-    return bcrypt.checkpw(
-        password_bytes,
-        hashed_bytes
+    return pwd_context.verify(
+        plain_password,
+        hashed_password,
     )
 
 
-# -------------------------
-# JWT configuration
-# -------------------------
+# ============================================================
+# JWT CONFIGURATION
+# ============================================================
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 
 if not JWT_SECRET:
-    raise RuntimeError("JWT_SECRET is not set")
+    raise RuntimeError(
+        "JWT_SECRET is not set. "
+        "Add JWT_SECRET to backend/.env"
+    )
+
 
 JWT_ALGORITHM = os.getenv(
     "JWT_ALGORITHM",
-    "HS256"
+    "HS256",
 )
 
 ACCESS_TOKEN_EXPIRE_MINUTES = int(
     os.getenv(
         "ACCESS_TOKEN_EXPIRE_MINUTES",
-        "30"
+        "30",
     )
 )
 
 
-# -------------------------
-# Create JWT
-# -------------------------
+# ============================================================
+# CREATE ACCESS TOKEN
+# ============================================================
 
 def create_access_token(user_id: int) -> str:
+    """
+    Create a JWT containing the authenticated user's ID.
+    """
 
-    expire = datetime.now(
-        timezone.utc
-    ) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+    expire = (
+        datetime.now(timezone.utc)
+        + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
     )
 
     payload = {
         "sub": str(user_id),
-        "exp": expire
+        "exp": expire,
     }
 
     return jwt.encode(
         payload,
         JWT_SECRET,
-        algorithm=JWT_ALGORITHM
+        algorithm=JWT_ALGORITHM,
     )
 
 
-# -------------------------
-# Verify JWT
-# -------------------------
+# ============================================================
+# VERIFY ACCESS TOKEN
+# ============================================================
 
 def verify_access_token(
-    token: str
+    token: str,
 ) -> int | None:
+    """
+    Validate a JWT and return the user ID.
+
+    Returns None when:
+    - token is invalid
+    - token is expired
+    - user ID is missing
+    """
 
     try:
         payload = jwt.decode(
             token,
             JWT_SECRET,
-            algorithms=[JWT_ALGORITHM]
+            algorithms=[JWT_ALGORITHM],
         )
 
         user_id = payload.get("sub")
@@ -115,22 +117,9 @@ def verify_access_token(
 
         return int(user_id)
 
-    except (JWTError, ValueError):
-        return None
-
-
-security = HTTPBearer()
-
-
-def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> int:
-    user_id = verify_access_token(credentials.credentials)
-
-    if user_id is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token",
-        )
-
-    return user_id    
+    except (
+        JWTError,
+        ValueError,
+        TypeError,
+    ):
+        return None  

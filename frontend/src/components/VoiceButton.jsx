@@ -1,167 +1,253 @@
 import { useRef, useState } from "react";
-import {
-  Mic,
-  Square,
-} from "lucide-react";
-
-import {
-  transcribeVoice,
-} from "../services/api";
-
+import { Mic, Square, Loader2 } from "lucide-react";
+import { transcribeVoice } from "../services/api";
 
 export default function VoiceButton({
-  onTranscript,
+  onTranscription,
+  disabled = false,
 }) {
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
+  const chunksRef = useRef([]);
 
-  const [recording, setRecording] =
-    useState(false);
+  const [recording, setRecording] = useState(false);
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState("");
 
-  const [processing, setProcessing] =
-    useState(false);
+  const getSupportedMimeType = () => {
+    const types = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+    ];
 
-  const recorderRef =
-    useRef(null);
+    for (const type of types) {
+      if (
+        window.MediaRecorder &&
+        MediaRecorder.isTypeSupported(type)
+      ) {
+        return type;
+      }
+    }
 
-  const chunksRef =
-    useRef([]);
-
+    return "";
+  };
 
   const startRecording = async () => {
+    if (disabled || recording || processing) {
+      return;
+    }
 
     try {
+      setError("");
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          "Your browser does not support microphone access."
+        );
+      }
 
       const stream =
-        await navigator.mediaDevices
-          .getUserMedia({
-            audio: true,
-          });
+        await navigator.mediaDevices.getUserMedia({
+          audio: true,
+        });
 
-      const recorder =
-        new MediaRecorder(stream);
-
+      streamRef.current = stream;
       chunksRef.current = [];
 
-      recorderRef.current =
-        recorder;
+      const mimeType = getSupportedMimeType();
 
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
 
-      recorder.ondataavailable =
-        (event) => {
+      mediaRecorderRef.current = recorder;
 
-          if (
-            event.data.size > 0
-          ) {
-            chunksRef.current.push(
-              event.data
-            );
-          }
-        };
-
-
-      recorder.onstop = async () => {
-
-        setProcessing(true);
-
-        const blob =
-          new Blob(
-            chunksRef.current,
-            {
-              type: "audio/webm",
-            }
-          );
-
-        try {
-
-          const result =
-            await transcribeVoice(
-              blob
-            );
-
-          if (result.text) {
-            onTranscript(
-              result.text
-            );
-          }
-
-        } catch (error) {
-
-          console.error(error);
-
-          alert(
-            "Could not understand your voice."
-          );
-
-        } finally {
-
-          setProcessing(false);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
         }
       };
 
+      recorder.onerror = (event) => {
+        console.error(
+          "MediaRecorder error:",
+          event.error
+        );
+
+        setError(
+          "Something went wrong while recording."
+        );
+      };
+
+      recorder.onstop = async () => {
+        try {
+          setRecording(false);
+          setProcessing(true);
+
+          const finalMimeType =
+            recorder.mimeType || "audio/webm";
+
+          const audioBlob = new Blob(
+            chunksRef.current,
+            {
+              type: finalMimeType,
+            }
+          );
+
+          if (audioBlob.size === 0) {
+            throw new Error(
+              "No audio was recorded."
+            );
+          }
+
+          const result =
+            await transcribeVoice(audioBlob);
+
+          const transcript =
+            result?.text?.trim();
+
+          if (!transcript) {
+            throw new Error(
+              "No speech was detected."
+            );
+          }
+
+          if (onTranscription) {
+            await onTranscription(
+              transcript
+            );
+          }
+        } catch (err) {
+          console.error(
+            "Voice transcription failed:",
+            err
+          );
+
+          setError(
+            err.response?.data?.detail ||
+              err.message ||
+              "Could not transcribe your voice."
+          );
+        } finally {
+          setProcessing(false);
+
+          if (streamRef.current) {
+            streamRef.current
+              .getTracks()
+              .forEach((track) =>
+                track.stop()
+              );
+
+            streamRef.current = null;
+          }
+
+          mediaRecorderRef.current = null;
+          chunksRef.current = [];
+        }
+      };
 
       recorder.start();
 
       setRecording(true);
-
-    } catch (error) {
-
-      console.error(error);
-
-      alert(
-        "Please allow microphone access."
+    } catch (err) {
+      console.error(
+        "Microphone access failed:",
+        err
       );
+
+      if (
+        err.name ===
+        "NotAllowedError"
+      ) {
+        setError(
+          "Microphone permission was denied."
+        );
+      } else if (
+        err.name ===
+        "NotFoundError"
+      ) {
+        setError(
+          "No microphone was found."
+        );
+      } else {
+        setError(
+          err.message ||
+            "Could not access the microphone."
+        );
+      }
+
+      if (streamRef.current) {
+        streamRef.current
+          .getTracks()
+          .forEach((track) =>
+            track.stop()
+          );
+
+        streamRef.current = null;
+      }
     }
   };
-
 
   const stopRecording = () => {
+    const recorder =
+      mediaRecorderRef.current;
 
     if (
-      recorderRef.current &&
-      recorderRef.current.state !==
-        "inactive"
+      recorder &&
+      recorder.state !== "inactive"
     ) {
-
-      recorderRef.current.stop();
-
-      recorderRef.current.stream
-        .getTracks()
-        .forEach(
-          (track) =>
-            track.stop()
-        );
+      recorder.stop();
     }
-
-    setRecording(false);
   };
 
+  const handleClick = () => {
+    if (recording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
 
   return (
-    <button
-      type="button"
-      onClick={
-        recording
-          ? stopRecording
-          : startRecording
-      }
-      disabled={processing}
-      className={`rounded-xl p-3 transition ${
-        recording
-          ? "bg-red-500 text-white"
-          : "bg-white/5 text-gray-300 hover:bg-white/10 hover:text-white"
-      } disabled:opacity-50`}
-      title={
-        recording
-          ? "Stop recording"
-          : "Talk to TouchGrass"
-      }
-    >
+    <div className="relative">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={
+          disabled || processing
+        }
+        title={
+          recording
+            ? "Stop recording"
+            : "Speak to TouchGrass"
+        }
+        className={`flex min-h-12 min-w-12 items-center justify-center rounded-2xl border transition ${
+          recording
+            ? "border-red-500/60 bg-red-500/15 text-red-300 hover:bg-red-500/25"
+            : "border-amber-800/50 bg-amber-950/20 text-amber-300 hover:border-amber-500/60 hover:bg-amber-900/30"
+        } disabled:cursor-not-allowed disabled:opacity-40`}
+      >
+        {processing ? (
+          <Loader2
+            size={19}
+            className="animate-spin"
+          />
+        ) : recording ? (
+          <Square
+            size={18}
+            fill="currentColor"
+          />
+        ) : (
+          <Mic size={20} />
+        )}
+      </button>
 
-      {recording ? (
-        <Square size={20} />
-      ) : (
-        <Mic size={20} />
+      {error && (
+        <div className="absolute right-0 top-14 z-20 w-64 rounded-xl border border-red-900/50 bg-[#1a0d0d] px-3 py-2 text-xs leading-5 text-red-300 shadow-xl">
+          {error}
+        </div>
       )}
-
-    </button>
+    </div>
   );
 }

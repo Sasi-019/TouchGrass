@@ -1,120 +1,86 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import UserProfile
-from ..schemas import ProfileCreate, ProfileResponse
+from ..ai_service import clean_profile, normalize_profile
 from ..auth import verify_access_token
-from ..ai_service import normalize_profile
-
+from ..database import get_db
+from ..models import User, UserProfile
+from ..schemas import ProfileCreate, ProfileResponse
 
 router = APIRouter(
     prefix="/profile",
-    tags=["Profile"]
+    tags=["Profile"],
 )
 
 security = HTTPBearer()
 
 
 def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    user_id = verify_access_token(
-        credentials.credentials
-    )
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    user_id = verify_access_token(credentials.credentials)
 
     if user_id is None:
         raise HTTPException(
             status_code=401,
-            detail="Invalid or expired token"
+            detail="Invalid or expired token.",
         )
 
     return user_id
 
 
-@router.post(
-    "",
-    response_model=ProfileResponse
-)
-def create_or_update_profile(
-    profile_data: ProfileCreate,
+@router.post("/normalize")
+def normalize_user_profile(
+    payload: dict[str, Any],
     user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
-):
+) -> dict[str, Any]:
 
-    profile = (
-        db.query(UserProfile)
-        .filter(UserProfile.user_id == user_id)
-        .first()
-    )
+    answers = payload.get("answers")
 
-    if profile is None:
-
-        profile = UserProfile(
-            user_id=user_id
+    if not isinstance(answers, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Request must contain an 'answers' object.",
         )
 
-        db.add(profile)
+    try:
+        print("\n========== PROFILE NORMALIZATION ==========")
+        print("User ID:", user_id)
+        print("Answers:", answers)
 
-    profile.interests = profile_data.interests
+        raw_profile = normalize_profile(answers)
 
-    profile.wants_more_of = (
-        profile_data.wants_more_of
-    )
+        print("Raw Groq profile:")
+        print(raw_profile)
 
-    profile.curiosity = (
-        profile_data.curiosity
-    )
+        profile = clean_profile(raw_profile)
 
-    profile.experience_preferences = (
-        profile_data.experience_preferences
-    )
+        print("Cleaned profile:")
+        print(profile)
+        print("===========================================\n")
 
-    profile.dislikes = (
-        profile_data.dislikes
-    )
+        return profile
 
-    profile.constraints = (
-        profile_data.constraints
-    )
+    except Exception as exc:
+        print("\n========== PROFILE AI ERROR ==========")
+        print(type(exc).__name__)
+        print(str(exc))
+        print("======================================\n")
 
-    profile.typical_free_time = (
-        profile_data.typical_free_time
-    )
-
-    db.commit()
-    db.refresh(profile)
-
-    return profile
+        raise HTTPException(
+            status_code=500,
+            detail=f"Profile AI normalization failed: {type(exc).__name__}: {str(exc)}",
+        )
 
 
 @router.get(
     "",
-    response_model=ProfileResponse
+    response_model=ProfileResponse,
 )
 def get_profile(
-    user_id: int = Depends(get_current_user_id),
-    db: Session = Depends(get_db)
-):
-
-    profile = (
-        db.query(UserProfile)
-        .filter(UserProfile.user_id == user_id)
-        .first()
-    )
-
-    if profile is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Profile not found"
-        )
-
-    return profile
-
-
-@router.post("/normalize")
-def normalize_user_profile(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
@@ -124,73 +90,89 @@ def normalize_user_profile(
         .first()
     )
 
-    if profile is None:
+    if not profile:
         raise HTTPException(
             status_code=404,
-            detail="Profile not found",
+            detail="Profile not found.",
         )
 
-    raw_profile = {
-        "interests": profile.interests or [],
-        "wants_more_of": profile.wants_more_of or [],
-        "curiosity": profile.curiosity or [],
-        "experience_preferences":
-            profile.experience_preferences or [],
-        "dislikes": profile.dislikes or [],
-        "constraints": profile.constraints or [],
-        "typical_free_time":
-            profile.typical_free_time or "",
-    }
+    return profile
 
-    try:
-        normalized = normalize_profile(raw_profile)
-    except Exception as exc:
-        print("AI profile normalization failed:", exc)
 
+@router.post(
+    "",
+    response_model=ProfileResponse,
+)
+def create_or_update_profile(
+    profile_data: ProfileCreate,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.id == user_id)
+        .first()
+    )
+
+    if not user:
         raise HTTPException(
-            status_code=502,
-            detail="AI profile analysis failed",
+            status_code=404,
+            detail="User not found.",
         )
 
-    profile.interests = normalized.get(
-        "interests",
-        [],
+    profile = (
+        db.query(UserProfile)
+        .filter(UserProfile.user_id == user_id)
+        .first()
     )
 
-    profile.wants_more_of = normalized.get(
-        "wants_more_of",
-        [],
-    )
+    if profile is None:
+        profile = UserProfile(
+            user_id=user_id,
+        )
+        db.add(profile)
 
-    profile.curiosity = normalized.get(
-        "curiosity",
-        [],
+    profile.interests = profile_data.interests
+    profile.wants_more_of = profile_data.wants_more_of
+    profile.curiosity = profile_data.curiosity
+    profile.experience_preferences = (
+        profile_data.experience_preferences
     )
-
-    profile.experience_preferences = normalized.get(
-        "experience_preferences",
-        [],
+    profile.dislikes = profile_data.dislikes
+    profile.constraints = profile_data.constraints
+    profile.typical_free_time = (
+        profile_data.typical_free_time
     )
-
-    profile.dislikes = normalized.get(
-        "dislikes",
-        [],
-    )
-
-    profile.constraints = normalized.get(
-        "constraints",
-        [],
-    )
-
-    profile.typical_free_time = normalized.get(
-        "typical_free_time",
-        "",
+    profile.adventure_level = (
+        profile_data.adventure_level
     )
 
     db.commit()
     db.refresh(profile)
 
+    return profile
+
+
+@router.delete("")
+def delete_profile(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    profile = (
+        db.query(UserProfile)
+        .filter(UserProfile.user_id == user_id)
+        .first()
+    )
+
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail="Profile not found.",
+        )
+
+    db.delete(profile)
+    db.commit()
+
     return {
-        "message": "Profile normalized successfully",
-        "profile": profile,
+        "message": "Profile deleted successfully."
     }

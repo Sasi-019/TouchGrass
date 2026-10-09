@@ -1,725 +1,565 @@
+import { useEffect, useState } from "react";
 import {
-  useEffect,
-  useState,
-} from "react";
-
-import {
-  MapPin,
+  Compass,
   User,
-  Send,
-  Volume2,
   Sparkles,
-  Clock,
+  ArrowRight,
+  Clock3,
+  MapPin,
+  RefreshCw,
+  Mic,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
-import {
-  chatWithAgent,
-  getProfile,
-} from "../services/api";
-
+import ActivityCard from "../components/ActivityCard";
 import VoiceButton from "../components/VoiceButton";
 
+import {
+  getActivities,
+  chatWithAgent,
+} from "../services/api";
 
-export default function Home({
-  onProfile,
-}) {
 
-  const [profile, setProfile] =
-    useState(null);
+export default function Home({ onProfile }) {
+  const navigate = useNavigate();
 
-  const [message, setMessage] =
-    useState("");
+  const [activities, setActivities] = useState([]);
+  const [request, setRequest] = useState(
+    "Give me something meaningful to do today."
+  );
 
-  const [conversation, setConversation] =
-    useState([]);
+  const [loading, setLoading] = useState(true);
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState("");
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
 
-  const [activity, setActivity] =
-    useState(null);
 
-  const [environment, setEnvironment] =
-    useState(null);
-
-  const [location, setLocation] =
-    useState(null);
-
-  const [loading, setLoading] =
-    useState(false);
-
+  // ============================================================
+  // LOAD EXISTING ACTIVITIES
+  // ============================================================
 
   useEffect(() => {
-
-    getProfile()
-      .then(setProfile)
-      .catch(console.error);
-
-
-    if (
-      navigator.geolocation
-    ) {
-
-      navigator.geolocation
-        .getCurrentPosition(
-          (position) => {
-
-            setLocation({
-              latitude:
-                position.coords.latitude,
-
-              longitude:
-                position.coords.longitude,
-            });
-
-          },
-
-          (error) => {
-
-            console.warn(
-              "Location unavailable:",
-              error
-            );
-
-          }
-        );
-    }
-
+    loadActivities();
   }, []);
 
 
-  const speak = (text) => {
-
-    if (
-      !window.speechSynthesis ||
-      !text
-    ) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    const utterance =
-      new SpeechSynthesisUtterance(
-        text
-      );
-
-    utterance.rate = 1;
-
-    window.speechSynthesis.speak(
-      utterance
-    );
-  };
-
-
-  const sendMessage = async (
-    suppliedMessage
-  ) => {
-
-    const text =
-      (
-        suppliedMessage ??
-        message
-      ).trim();
-
-    if (!text || loading) {
-      return;
-    }
-
-
-    setConversation(
-      (previous) => [
-        ...previous,
-        {
-          role: "user",
-          text,
-        },
-      ]
-    );
-
-    setMessage("");
-
-    setLoading(true);
-
-
+  const loadActivities = async () => {
     try {
+      setLoading(true);
+      setError("");
 
-      const result =
-        await chatWithAgent({
-          message: text,
+      const data = await getActivities();
 
-          latitude:
-            location?.latitude,
-
-          longitude:
-            location?.longitude,
-        });
-
-
-      setActivity(
-        result.activity
+      setActivities(
+        Array.isArray(data) ? data : []
       );
 
-      setEnvironment(
-        result.environment
-      );
+    } catch (err) {
+      console.error("Failed to load activities:", err);
 
-
-      const response =
-        result.activity
-          ? `${result.activity.title}. ${result.activity.description}`
-          : result.reason ||
-            "I have an idea for you.";
-
-
-      setConversation(
-        (previous) => [
-          ...previous,
-          {
-            role: "assistant",
-            text: response,
-          },
-        ]
-      );
-
-
-      speak(response);
-
-    } catch (error) {
-
-      console.error(error);
-
-      setConversation(
-        (previous) => [
-          ...previous,
-          {
-            role: "assistant",
-            text:
-              "I couldn't reach the TouchGrass agent. Please try again.",
-          },
-        ]
+      setError(
+        err.response?.data?.detail ||
+        "Could not load your activities."
       );
 
     } finally {
-
       setLoading(false);
     }
   };
 
 
-  const handleVoice = (
-    transcript
-  ) => {
+  // ============================================================
+  // ASK TOUCHGRASS
+  // ============================================================
 
-    setMessage(transcript);
+  const handleAsk = async () => {
+    const message = request.trim();
 
-    sendMessage(transcript);
+    if (!message || asking) {
+      return;
+    }
+
+    try {
+      setAsking(true);
+      setError("");
+
+      const result = await chatWithAgent({
+        message,
+        latitude: null,
+        longitude: null,
+        voice_enabled: false,
+      });
+
+      if (result.activity) {
+        const newActivity = {
+          id: result.activity_id,
+          title: result.activity.title,
+          description: result.activity.description,
+          category: result.activity.category,
+          duration_minutes:
+            result.activity.duration_minutes,
+          status: "suggested",
+          context: {
+            reason: result.reason,
+          },
+        };
+
+        setActivities((current) => [
+          newActivity,
+          ...current,
+        ]);
+      }
+
+      // Clear the request after successful generation.
+      setRequest("");
+
+    } catch (err) {
+      console.error(
+        "Agent request failed:",
+        err
+      );
+
+      setError(
+        err.response?.data?.detail ||
+        "TouchGrass could not generate an activity."
+      );
+
+    } finally {
+      setAsking(false);
+    }
   };
 
 
-  const interests =
-    profile?.interests || [];
+  // ============================================================
+  // VOICE TRANSCRIPTION
+  // ============================================================
+
+  const handleVoiceTranscription = async (
+    transcript
+  ) => {
+    if (!transcript?.trim()) {
+      return;
+    }
+
+    setRequest(transcript.trim());
+
+    // Automatically send the transcribed request
+    // to the existing LangGraph agent.
+    try {
+      setVoiceProcessing(true);
+      setError("");
+
+      const result = await chatWithAgent({
+        message: transcript.trim(),
+        latitude: null,
+        longitude: null,
+        voice_enabled: true,
+      });
+
+      if (result.activity) {
+        const newActivity = {
+          id: result.activity_id,
+          title: result.activity.title,
+          description: result.activity.description,
+          category: result.activity.category,
+          duration_minutes:
+            result.activity.duration_minutes,
+          status: "suggested",
+          context: {
+            reason: result.reason,
+          },
+        };
+
+        setActivities((current) => [
+          newActivity,
+          ...current,
+        ]);
+      }
+
+      setRequest("");
+
+    } catch (err) {
+      console.error(
+        "Voice agent request failed:",
+        err
+      );
+
+      setError(
+        err.response?.data?.detail ||
+        "TouchGrass could not process your voice request."
+      );
+
+    } finally {
+      setVoiceProcessing(false);
+    }
+  };
+
+
+  // ============================================================
+  // QUICK PROMPTS
+  // ============================================================
+
+  const quickPrompts = [
+    "I want to explore something new.",
+    "Give me something creative to do.",
+    "I want to spend time outdoors.",
+    "I want to meet people.",
+  ];
+
+
+  const isBusy =
+    asking || voiceProcessing;
 
 
   return (
-    <div className="min-h-screen bg-[#090706] text-white">
+    <div className="min-h-screen bg-[#0d0a07] text-white">
 
-      {/* Header */}
+      {/* ======================================================
+          NAVBAR
+      ======================================================= */}
 
-      <header className="border-b border-white/10 bg-[#0d0a08]/90 backdrop-blur">
+      <nav className="border-b border-amber-900/30 bg-[#110c08]/90 backdrop-blur">
 
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
 
-          <div className="flex items-center gap-3">
-
+          <button
+            onClick={() => navigate("/home")}
+            className="flex items-center gap-3"
+          >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500 text-black">
-
-              <Sparkles size={20} />
-
+              <Compass size={22} />
             </div>
 
-            <div>
-
-              <h1 className="font-bold">
+            <div className="text-left">
+              <h1 className="text-lg font-bold">
                 TouchGrass
               </h1>
 
-              <p className="text-xs text-gray-500">
-                Your real-world AI companion
+              <p className="text-xs text-amber-200/50">
+                Less screen. More life.
               </p>
-
             </div>
-
-          </div>
+          </button>
 
 
           <button
             onClick={onProfile}
-            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-gray-300 transition hover:bg-white/10 hover:text-white"
+            className="flex items-center gap-2 rounded-xl border border-amber-800/40 bg-amber-950/20 px-4 py-2 text-sm text-amber-100 transition hover:bg-amber-900/30"
           >
-
             <User size={17} />
-
             My Profile
-
           </button>
 
         </div>
 
-      </header>
+      </nav>
 
 
-      <main className="mx-auto max-w-6xl px-5 py-8">
+      {/* ======================================================
+          MAIN
+      ======================================================= */}
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+      <main className="mx-auto max-w-7xl px-6 py-10">
 
+        {/* HERO */}
 
-          {/* Assistant */}
+        <section className="mb-10">
 
-          <section>
+          <div className="mb-3 flex items-center gap-2 text-sm text-amber-400">
+            <Sparkles size={16} />
+            <span>Your real-world activity agent</span>
+          </div>
 
-            <div className="mb-6">
+          <h2 className="max-w-3xl text-4xl font-bold leading-tight md:text-5xl">
+            What do you feel like
+            <span className="text-amber-400">
+              {" "}doing?
+            </span>
+          </h2>
 
-              <p className="text-sm font-medium text-amber-400">
-                YOUR AI ASSISTANT
-              </p>
+          <p className="mt-4 max-w-2xl text-base leading-7 text-white/55">
+            Tell TouchGrass what you want.
+            Type it or speak naturally.
+            Your agent will turn it into something
+            meaningful you can actually do.
+          </p>
 
-              <h2 className="mt-2 text-3xl font-bold sm:text-4xl">
-                What do you feel like doing?
-              </h2>
-
-              <p className="mt-2 text-gray-500">
-                Don't plan. Just tell me what
-                you're feeling.
-              </p>
-
-            </div>
-
-
-            {/* Conversation */}
-
-            <div className="min-h-[400px] space-y-4 rounded-3xl border border-white/10 bg-white/[0.025] p-5">
-
-              {conversation.length ===
-                0 && (
-
-                <div className="flex min-h-[350px] flex-col items-center justify-center text-center">
-
-                  <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400">
-
-                    <Sparkles size={30} />
-
-                  </div>
-
-                  <h3 className="text-xl font-semibold">
-                    Talk to TouchGrass
-                  </h3>
-
-                  <p className="mt-2 max-w-md text-gray-500">
-                    Tell me what you're
-                    interested in, how you're
-                    feeling, how much time you
-                    have, or where you want to
-                    go.
-                  </p>
+        </section>
 
 
-                  <div className="mt-6 flex flex-wrap justify-center gap-2">
+        {/* ====================================================
+            REQUEST BOX
+        ===================================================== */}
 
-                    {[
-                      "Give me something to do",
-                      "I'm tired",
-                      "I want to go outside",
-                      "Find a park nearby",
-                      "Find a restaurant",
-                    ].map(
-                      (item) => (
+        <section className="mb-10">
 
-                        <button
-                          key={item}
-                          onClick={() =>
-                            sendMessage(
-                              item
-                            )
-                          }
-                          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-gray-400 hover:border-amber-500/30 hover:text-white"
-                        >
-                          {item}
-                        </button>
+          <div className="rounded-3xl border border-amber-900/40 bg-[#15100c] p-5 shadow-2xl">
 
-                      )
-                    )}
+            <div className="flex flex-col gap-4 md:flex-row md:items-end">
 
-                  </div>
+              {/* TEXT INPUT */}
 
-                </div>
+              <div className="flex-1">
 
-              )}
+                <label className="mb-2 block text-sm font-medium text-amber-100/70">
+                  Tell me what you want
+                </label>
 
-
-              {conversation.map(
-                (item, index) => (
-
-                  <div
-                    key={index}
-                    className={
-                      item.role === "user"
-                        ? "ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-amber-500 px-4 py-3 text-black"
-                        : "max-w-[85%] rounded-2xl rounded-bl-md border border-white/10 bg-white/5 px-4 py-3 text-gray-200"
+                <textarea
+                  value={request}
+                  onChange={(event) =>
+                    setRequest(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      !event.shiftKey
+                    ) {
+                      event.preventDefault();
+                      handleAsk();
                     }
-                  >
-
-                    <div>
-                      {item.text}
-                    </div>
-
-
-                    {item.role ===
-                      "assistant" && (
-
-                      <button
-                        onClick={() =>
-                          speak(
-                            item.text
-                          )
-                        }
-                        className="mt-2 text-gray-500 hover:text-white"
-                      >
-                        <Volume2
-                          size={16}
-                        />
-                      </button>
-
-                    )}
-
-                  </div>
-
-                )
-              )}
-
-
-              {loading && (
-
-                <div className="max-w-[85%] rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-gray-500">
-
-                  TouchGrass is thinking...
-
-                </div>
-
-              )}
-
-            </div>
-
-
-            {/* Activity */}
-
-            {activity && (
-
-              <div className="mt-5 rounded-3xl border border-amber-500/20 bg-amber-500/[0.06] p-6">
-
-                <div className="flex items-center gap-2 text-amber-400">
-
-                  <Sparkles size={17} />
-
-                  <span className="text-sm font-semibold">
-                    Your challenge
-                  </span>
-
-                </div>
-
-
-                <h3 className="mt-3 text-2xl font-bold">
-                  {activity.title}
-                </h3>
-
-
-                <p className="mt-3 leading-7 text-gray-300">
-                  {activity.description}
-                </p>
-
-
-                <div className="mt-5 flex flex-wrap gap-2">
-
-                  {activity.duration_minutes && (
-
-                    <span className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-2 text-sm text-gray-400">
-
-                      <Clock size={14} />
-
-                      {
-                        activity.duration_minutes
-                      }{" "}
-                      minutes
-
-                    </span>
-
-                  )}
-
-
-                  {activity.place?.name && (
-
-                    <span className="flex items-center gap-2 rounded-full bg-white/5 px-3 py-2 text-sm text-gray-400">
-
-                      <MapPin size={14} />
-
-                      {
-                        activity.place.name
-                      }
-
-                    </span>
-
-                  )}
-
-                </div>
+                  }}
+                  rows={3}
+                  disabled={isBusy}
+                  placeholder="Example: I want to do something outdoors today..."
+                  className="w-full resize-none rounded-2xl border border-amber-900/40 bg-black/30 px-4 py-3 text-sm text-white outline-none transition placeholder:text-white/25 focus:border-amber-500/60"
+                />
 
               </div>
 
-            )}
 
+              {/* VOICE + ASK */}
 
-            {/* Composer */}
+              <div className="flex gap-3">
 
-            <div className="mt-5 flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 p-2">
-
-              <VoiceButton
-                onTranscript={
-                  handleVoice
-                }
-              />
-
-
-              <input
-                value={message}
-                onChange={(event) =>
-                  setMessage(
-                    event.target.value
-                  )
-                }
-                onKeyDown={(event) => {
-
-                  if (
-                    event.key ===
-                    "Enter"
-                  ) {
-                    sendMessage();
+                <VoiceButton
+                  onTranscription={
+                    handleVoiceTranscription
                   }
-
-                }}
-                placeholder="Talk to TouchGrass..."
-                className="flex-1 bg-transparent px-3 py-3 text-white outline-none placeholder:text-gray-600"
-              />
-
-
-              <button
-                onClick={() =>
-                  sendMessage()
-                }
-                disabled={
-                  !message.trim() ||
-                  loading
-                }
-                className="rounded-xl bg-amber-500 p-3 text-black hover:bg-amber-400 disabled:opacity-30"
-              >
-
-                <Send size={19} />
-
-              </button>
-
-            </div>
-
-          </section>
-
-
-          {/* Profile sidebar */}
-
-          <aside>
-
-            <div className="sticky top-6 rounded-3xl border border-white/10 bg-white/[0.025] p-5">
-
-              <div className="mb-5 flex items-center justify-between">
-
-                <div>
-
-                  <p className="text-xs uppercase tracking-widest text-gray-500">
-                    Personalization
-                  </p>
-
-                  <h3 className="mt-1 text-xl font-bold">
-                    About you
-                  </h3>
-
-                </div>
-
+                  disabled={isBusy}
+                />
 
                 <button
-                  onClick={onProfile}
-                  className="text-sm text-amber-400 hover:text-amber-300"
+                  onClick={handleAsk}
+                  disabled={
+                    isBusy ||
+                    !request.trim()
+                  }
+                  className="flex min-h-12 items-center justify-center gap-2 rounded-2xl bg-amber-500 px-6 font-semibold text-black transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  View
+
+                  {asking ? (
+                    <>
+                      <RefreshCw
+                        size={18}
+                        className="animate-spin"
+                      />
+
+                      Thinking...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={18} />
+
+                      Ask TouchGrass
+
+                      <ArrowRight size={17} />
+                    </>
+                  )}
+
                 </button>
 
               </div>
 
+            </div>
 
-              {/* Interests */}
 
-              <div>
+            {/* VOICE STATUS */}
 
-                <p className="mb-3 text-sm text-gray-500">
-                  Your interests
-                </p>
+            {voiceProcessing && (
+              <div className="mt-4 flex items-center gap-2 text-sm text-amber-300">
 
-                <div className="space-y-3">
+                <Mic size={15} />
 
-                  {interests.length ? (
-
-                    interests
-                      .slice(0, 5)
-                      .map(
-                        (
-                          interest,
-                          index
-                        ) => (
-
-                          <div
-                            key={index}
-                          >
-
-                            <div className="mb-1 flex justify-between text-sm">
-
-                              <span className="text-gray-300">
-                                {
-                                  interest.name
-                                }
-                              </span>
-
-                              <span className="text-gray-600">
-                                {Math.round(
-                                  (
-                                    interest.strength ||
-                                    0
-                                  ) * 100
-                                )}%
-                              </span>
-
-                            </div>
-
-                            <div className="h-1.5 rounded-full bg-white/10">
-
-                              <div
-                                className="h-full rounded-full bg-amber-500"
-                                style={{
-                                  width: `${(
-                                    interest.strength ||
-                                    0
-                                  ) * 100}%`,
-                                }}
-                              />
-
-                            </div>
-
-                          </div>
-
-                        )
-                      )
-
-                  ) : (
-
-                    <p className="text-sm text-gray-600">
-                      Complete your profile
-                      discovery first.
-                    </p>
-
-                  )}
-
-                </div>
+                <span>
+                  Listening to your request...
+                </span>
 
               </div>
+            )}
 
 
-              {/* Preferences */}
+            {/* ERROR */}
 
-              <div className="mt-6">
-
-                <p className="mb-3 text-sm text-gray-500">
-                  You prefer
-                </p>
-
-                <div className="flex flex-wrap gap-2">
-
-                  {(
-                    profile
-                      ?.experience_preferences ||
-                    []
-                  ).map(
-                    (item, index) => (
-
-                      <span
-                        key={index}
-                        className="rounded-full bg-white/5 px-3 py-1.5 text-xs text-gray-400"
-                      >
-                        {item}
-                      </span>
-
-                    )
-                  )}
-
-                </div>
-
+            {error && (
+              <div className="mt-4 rounded-xl border border-red-900/40 bg-red-950/20 px-4 py-3 text-sm text-red-300">
+                {error}
               </div>
+            )}
+
+          </div>
+
+        </section>
 
 
-              {/* Time */}
+        {/* ====================================================
+            QUICK PROMPTS
+        ===================================================== */}
 
-              <div className="mt-6 border-t border-white/10 pt-5">
+        <section className="mb-12">
 
-                <div className="flex items-center gap-2 text-sm text-gray-400">
+          <div className="mb-4 flex items-center gap-2">
+            <Sparkles
+              size={17}
+              className="text-amber-400"
+            />
 
-                  <Clock size={15} />
+            <h3 className="font-semibold">
+              Try saying...
+            </h3>
+          </div>
 
-                  Typical time
 
-                </div>
+          <div className="flex flex-wrap gap-3">
 
-                <p className="mt-1 text-gray-200">
+            {quickPrompts.map((prompt) => (
 
-                  {
-                    profile?.typical_free_time ||
-                    "Not set"
-                  }
+              <button
+                key={prompt}
+                onClick={() =>
+                  setRequest(prompt)
+                }
+                disabled={isBusy}
+                className="rounded-full border border-amber-900/40 bg-[#15100c] px-4 py-2 text-sm text-white/65 transition hover:border-amber-500/50 hover:text-amber-200 disabled:opacity-40"
+              >
+                {prompt}
+              </button>
 
+            ))}
+
+          </div>
+
+        </section>
+
+
+        {/* ====================================================
+            ACTIVITIES
+        ===================================================== */}
+
+        <section>
+
+          <div className="mb-6 flex items-center justify-between">
+
+            <div>
+
+              <h3 className="text-2xl font-bold">
+                Your activities
+              </h3>
+
+              <p className="mt-1 text-sm text-white/40">
+                Things TouchGrass thinks you might enjoy.
+              </p>
+
+            </div>
+
+
+            <button
+              onClick={loadActivities}
+              disabled={loading}
+              className="rounded-xl border border-amber-900/40 p-2 text-white/50 transition hover:bg-amber-900/20 hover:text-amber-200"
+              title="Refresh activities"
+            >
+              <RefreshCw
+                size={17}
+                className={
+                  loading
+                    ? "animate-spin"
+                    : ""
+                }
+              />
+            </button>
+
+          </div>
+
+
+          {loading ? (
+
+            <div className="flex items-center justify-center rounded-3xl border border-amber-900/30 bg-[#15100c] py-20">
+
+              <div className="text-center">
+
+                <RefreshCw
+                  size={28}
+                  className="mx-auto mb-3 animate-spin text-amber-400"
+                />
+
+                <p className="text-sm text-white/40">
+                  Loading your activities...
                 </p>
-
-              </div>
-
-
-              {/* Location */}
-
-              <div className="mt-5 border-t border-white/10 pt-5">
-
-                <div className="flex items-center gap-2 text-sm">
-
-                  <MapPin
-                    size={15}
-                    className={
-                      location
-                        ? "text-green-400"
-                        : "text-gray-600"
-                    }
-                  />
-
-                  <span className="text-gray-400">
-
-                    {location
-                      ? "Location available"
-                      : "Location not shared"}
-
-                  </span>
-
-                </div>
 
               </div>
 
             </div>
 
-          </aside>
+          ) : activities.length === 0 ? (
+
+            <div className="rounded-3xl border border-dashed border-amber-900/40 bg-[#15100c] px-6 py-16 text-center">
+
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-400">
+
+                <Compass size={26} />
+
+              </div>
+
+              <h4 className="text-lg font-semibold">
+                Nothing here yet
+              </h4>
+
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-white/40">
+                Tell TouchGrass what you're in the mood
+                for and your first real-world challenge
+                will appear here.
+              </p>
+
+            </div>
+
+          ) : (
+
+            <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+
+              {activities.map((activity) => (
+
+                <ActivityCard
+                  key={activity.id}
+                  activity={activity}
+                  onClick={() =>
+                    navigate(
+                      `/activity/${activity.id}`
+                    )
+                  }
+                />
+
+              ))}
+
+            </div>
+
+          )}
+
+        </section>
+
+
+        {/* ====================================================
+            FOOTER MESSAGE
+        ===================================================== */}
+
+        <div className="mt-16 flex items-center justify-center gap-2 text-center text-xs text-white/25">
+
+          <MapPin size={13} />
+
+          <span>
+            TouchGrass is designed to get you away
+            from the screen and into the real world.
+          </span>
 
         </div>
 
