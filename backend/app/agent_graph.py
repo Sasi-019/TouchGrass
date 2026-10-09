@@ -6,570 +6,481 @@ from langgraph.graph import StateGraph, START, END
 from sqlalchemy.orm import Session
 
 from .ai_service import generate_json
-from .models import Activity, ActivityFeedback, UserProfile
+from .models import Activity, ConversationMessage, UserProfile
+from .real_world_tools import get_weather, search_nearby_places
 
-
-# ============================================================
-# STATE
-# ============================================================
 
 class TouchGrassState(TypedDict, total=False):
     user_id: int
     user_message: str
-
     profile: dict[str, Any]
-    history: list[dict[str, Any]]
+    conversation_history: list[dict[str, Any]]
+    activity_history: list[dict[str, Any]]
     current_context: dict[str, Any]
-
-    activity: dict[str, Any]
+    agent_context: dict[str, Any]
+    tool_plan: dict[str, Any]
+    tool_results: list[dict[str, Any]]
+    intent: str
+    reply: str
+    activity: dict[str, Any] | None
+    reason: str | None
     error: str
 
 
-# ============================================================
-# PROMPT
-# ============================================================
+PLANNER_PROMPT = """
+You are the tool planner for TouchGrass.
 
-TOUCHGRASS_PROMPT = """
-You are TouchGrass, a personalized real-world activity agent.
+Choose tools only when they are useful for answering the latest message.
 
-Your goal is to help the user spend less passive screen time and
-do meaningful activities in the real world.
+Available tools:
+- weather: current weather and today's forecast for a known city or coordinates.
+- nearby_places: find real nearby parks, cafes, restaurants, museums, and attractions.
 
-You receive:
-
-- long-term interests
-- things the user wants more of
-- curiosity
-- experience preferences
-- dislikes
-- constraints
-- typical available time
-- adventure level
-- previous activities
-- current context
-- the user's current request
-
-Create exactly ONE realistic offline activity.
+Return ONLY valid JSON:
+{
+  "tools": [],
+  "location": null,
+  "category": "all",
+  "needs_location": false
+}
 
 Rules:
-
-1. Prioritize strong interests.
-2. Respect dislikes and constraints.
-3. Respect available time.
-4. Avoid recently suggested activities.
-5. Prefer activities requiring little or no screen time.
-6. Prefer things the user can do with resources they already have.
-7. Consider current context when available.
-8. Occasionally combine two interests.
-9. Do not give a list of activities.
-10. Do not suggest dangerous or illegal activities.
-
-Return ONLY JSON.
-
-Format:
-
-{
-    "title": "short activity name",
-    "description": "clear instructions telling the user exactly what to do",
-    "category": "learn/create/explore/move/connect/relax",
-    "duration_minutes": 30,
-    "reason": "short explanation of why this fits the user"
-}
+- Use "weather" for current weather, temperature, rain, or forecast questions.
+- Use "nearby_places" for nearby places, outings, or location recommendations.
+- Both tools can be selected for an outing when weather is relevant.
+- Use the location explicitly stated by the user, or a city clearly established
+  in recent conversation history.
+- If the user says "near me" and usable latitude/longitude are supplied,
+  use those coordinates instead of asking for a city.
+- If location is essential but unavailable, set needs_location=true.
+- Do not call tools for ordinary conversation.
+- For places, category can be all, parks, cafes, museums, or attractions.
+- Never guess a city.
 """
 
 
-# ============================================================
-# NODE 1 — LOAD PROFILE
-# ============================================================
+AGENT_SYSTEM_PROMPT = """
+You are TouchGrass, a thoughtful conversational real-world activity agent.
 
-def load_profile_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
+Use the user's saved profile, recent conversation, past activities, and
+real tool results to answer naturally.
 
-    user_id = state["user_id"]
+Intent:
+- chat: greetings, normal questions, follow-ups, explanations.
+- activity: the user wants a specific activity, plan, challenge, or outing.
+- clarify: essential information is missing.
 
+Rules:
+- Use weather and places results when provided.
+- Never invent live weather, places, distances, opening hours, or availability.
+- If a tool fails, explain that briefly and still help where possible.
+- If location is missing, ask for it once.
+- Reuse the city from recent conversation history when clear.
+- For a limited break, account for travel time and the time needed to return.
+- Do not create an activity for every ordinary question.
+- Replies must be concise and conversational.
+- If recommending a place, use names from the actual tool results.
+- Do not claim a place is open unless reliable opening-hour information is supplied.
+- Return ONLY one valid JSON object, with no Markdown fences.
+
+Normal conversation:
+{
+  "intent": "chat",
+  "reply": "Natural response.",
+  "reason": null,
+  "activity": null
+}
+
+Activity:
+{
+  "intent": "activity",
+  "reply": "Short introduction.",
+  "reason": "Why this fits the user.",
+  "activity": {
+    "title": "Specific activity title",
+    "description": "Actionable instructions using verified results where applicable.",
+    "category": "exploration",
+    "duration_minutes": 30,
+    "reason": "Why this fits the user."
+  }
+}
+
+Clarification:
+{
+  "intent": "clarify",
+  "reply": "One concise question.",
+  "reason": null,
+  "activity": null
+}
+
+Allowed categories: creativity, outdoors, learning, fitness, social,
+relaxation, exploration, food, other.
+"""
+
+
+def load_profile_node(state: TouchGrassState, db: Session):
     profile = (
         db.query(UserProfile)
-        .filter(UserProfile.user_id == user_id)
+        .filter(UserProfile.user_id == state["user_id"])
         .first()
     )
 
-    if profile is None:
-        return {
-            **state,
-            "profile": {},
+    data = {}
+    if profile:
+        data = {
+            "interests": profile.interests or [],
+            "wants_more_of": profile.wants_more_of or [],
+            "curiosity": profile.curiosity or [],
+            "experience_preferences": profile.experience_preferences or [],
+            "dislikes": profile.dislikes or [],
+            "constraints": profile.constraints or [],
+            "typical_free_time": profile.typical_free_time or "",
+            "adventure_level": profile.adventure_level or "moderate",
         }
 
-    profile_data = {
-        "interests": profile.interests or [],
-        "wants_more_of": profile.wants_more_of or [],
-        "curiosity": profile.curiosity or [],
-        "experience_preferences": (
-            profile.experience_preferences or []
-        ),
-        "dislikes": profile.dislikes or [],
-        "constraints": profile.constraints or [],
-        "typical_free_time": (
-            profile.typical_free_time or ""
-        ),
-        "adventure_level": (
-            profile.adventure_level or ""
-        ),
-    }
-
-    return {
-        **state,
-        "profile": profile_data,
-    }
+    return {**state, "profile": data}
 
 
-# ============================================================
-# NODE 2 — LOAD HISTORY
-# ============================================================
+def load_conversation_node(state: TouchGrassState, db: Session):
+    messages = (
+        db.query(ConversationMessage)
+        .filter(ConversationMessage.user_id == state["user_id"])
+        .order_by(
+            ConversationMessage.created_at.desc(),
+            ConversationMessage.id.desc(),
+        )
+        .limit(12)
+        .all()
+    )
+    messages.reverse()
 
-def load_history_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
+    history = [
+        {"role": item.role, "content": item.content}
+        for item in messages
+    ]
+    return {**state, "conversation_history": history}
 
-    user_id = state["user_id"]
 
+def load_activity_history_node(state: TouchGrassState, db: Session):
     activities = (
         db.query(Activity)
-        .filter(Activity.user_id == user_id)
-        .order_by(Activity.created_at.desc())
+        .filter(Activity.user_id == state["user_id"])
+        .order_by(
+            Activity.created_at.desc(),
+            Activity.id.desc(),
+        )
         .limit(10)
         .all()
     )
 
-    history = []
+    history = [
+        {
+            "title": item.title,
+            "description": item.description,
+            "category": item.category,
+            "duration_minutes": item.duration_minutes,
+            "status": item.status,
+        }
+        for item in activities
+    ]
+    return {**state, "activity_history": history}
 
-    for activity in activities:
 
-        feedback = (
-            db.query(ActivityFeedback)
-            .filter(
-                ActivityFeedback.activity_id == activity.id,
-                ActivityFeedback.user_id == user_id,
-            )
-            .order_by(
-                ActivityFeedback.created_at.desc()
-            )
-            .first()
-        )
+def build_context_node(state: TouchGrassState):
+    context = {
+        "user_profile": state.get("profile", {}),
+        "recent_conversation": state.get("conversation_history", []),
+        "recent_activities": state.get("activity_history", []),
+        "request_context": state.get("current_context", {}),
+        "current_message": state.get("user_message", ""),
+    }
+    return {**state, "agent_context": context}
 
-        history.append(
-            {
-                "title": activity.title,
-                "category": activity.category,
-                "duration_minutes": (
-                    activity.duration_minutes
-                ),
-                "status": activity.status,
-                "rating": (
-                    feedback.rating
-                    if feedback
-                    else None
-                ),
-                "completed": (
-                    feedback.completed
-                    if feedback
-                    else None
-                ),
-                "comment": (
-                    feedback.comment
-                    if feedback
-                    else None
-                ),
-            }
-        )
+
+def plan_tools_node(state: TouchGrassState):
+    context = state.get("agent_context", {})
+    request_context = context.get("request_context", {})
+
+    planner_input = {
+        "recent_conversation": context.get("recent_conversation", []),
+        "current_message": context.get("current_message", ""),
+        "location_context": {
+            "city": request_context.get("city"),
+            "latitude": request_context.get("latitude"),
+            "longitude": request_context.get("longitude"),
+        },
+    }
+
+    plan = generate_json(
+        system_prompt=PLANNER_PROMPT,
+        user_prompt=json.dumps(planner_input, ensure_ascii=False),
+        temperature=0,
+        max_tokens=300,
+    )
+
+    if not isinstance(plan, dict):
+        plan = {}
+
+    allowed_tools = {"weather", "nearby_places"}
+    requested = plan.get("tools", [])
+    if not isinstance(requested, list):
+        requested = []
+
+    tools = [name for name in requested if name in allowed_tools]
+    location = plan.get("location")
+    if not isinstance(location, str) or not location.strip():
+        location = request_context.get("city")
 
     return {
         **state,
-        "history": history,
+        "tool_plan": {
+            "tools": tools,
+            "location": location.strip() if isinstance(location, str) else None,
+            "category": plan.get("category", "all"),
+            "needs_location": bool(plan.get("needs_location", False)),
+        },
+        "tool_results": [],
     }
 
 
-# ============================================================
-# NODE 3 — BUILD CURRENT CONTEXT
-# ============================================================
+def execute_tools_node(state: TouchGrassState):
+    plan = state.get("tool_plan", {})
+    context = state.get("current_context", {})
 
-def build_context_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
+    latitude = context.get("latitude")
+    longitude = context.get("longitude")
+    location = plan.get("location")
+    results = []
 
-    context = state.get(
-        "current_context",
-        {},
-    )
+    if plan.get("needs_location") and not (
+        latitude is not None and longitude is not None
+    ) and not location:
+        return {
+            **state,
+            "tool_results": [{
+                "tool": "location",
+                "ok": False,
+                "needs_location": True,
+                "error": "Ask the user which city or area they mean.",
+            }],
+        }
 
-    return {
-        **state,
-        "current_context": context,
+    for tool_name in plan.get("tools", []):
+        if tool_name == "weather":
+            result = get_weather(
+                location=location,
+                latitude=latitude,
+                longitude=longitude,
+            )
+        elif tool_name == "nearby_places":
+            result = search_nearby_places(
+                location=location,
+                latitude=latitude,
+                longitude=longitude,
+                category=plan.get("category", "all"),
+            )
+        else:
+            continue
+
+        results.append({"tool": tool_name, **result})
+
+    return {**state, "tool_results": results}
+
+
+def generate_response_node(state: TouchGrassState):
+    context = {
+        **state.get("agent_context", {}),
+        "tool_results": state.get("tool_results", []),
     }
-
-
-# ============================================================
-# NODE 4 — GENERATE ACTIVITY
-# ============================================================
-
-def generate_activity_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
-
-    user_message = state.get(
-        "user_message",
-        "",
-    )
-
-    profile = state.get(
-        "profile",
-        {},
-    )
-
-    history = state.get(
-        "history",
-        [],
-    )
-
-    context = state.get(
-        "current_context",
-        {},
-    )
 
     prompt = f"""
-USER REQUEST:
-{user_message}
+Answer the user's latest message using the context and tool results below.
 
-USER PROFILE:
-{json.dumps(
-    profile,
-    ensure_ascii=False,
-    indent=2,
-)}
+CONTEXT AND TOOL RESULTS:
+{json.dumps(context, ensure_ascii=False, indent=2)}
 
-RECENT ACTIVITY HISTORY:
-{json.dumps(
-    history,
-    ensure_ascii=False,
-    indent=2,
-)}
+Important:
+- Tool results are the source of truth for live weather and places.
+- If a tool failed, do not fabricate its result.
+- If the user supplied a city earlier, use it when it is clearly relevant.
+- Ask a concise location question only when the location cannot be resolved.
+- Normal weather questions should receive a direct answer, not an activity card.
+- For outing requests, provide a useful plan that fits the user's available time.
 
-CURRENT CONTEXT:
-{json.dumps(
-    context,
-    ensure_ascii=False,
-    indent=2,
-)}
-
-Generate ONE activity.
+LATEST USER MESSAGE:
+{state.get("user_message", "")}
 """
 
-    try:
-
-        activity = generate_json(
-            TOUCHGRASS_PROMPT,
-            prompt,
-            temperature=0.7,
-            max_tokens=600,
-        )
-
-        return {
-            **state,
-            "activity": activity,
-            "error": "",
-        }
-
-    except Exception as exc:
-
-        return {
-            **state,
-            "activity": {},
-            "error": (
-                f"{type(exc).__name__}: {str(exc)}"
-            ),
-        }
-
-
-# ============================================================
-# NODE 5 — VALIDATE ACTIVITY
-# ============================================================
-
-def validate_activity_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
-
-    activity = state.get(
-        "activity",
-        {},
+    result = generate_json(
+        system_prompt=AGENT_SYSTEM_PROMPT,
+        user_prompt=prompt,
+        temperature=0.3,
+        max_tokens=1400,
     )
 
-    if not activity:
-        return state
-
-    title = str(
-        activity.get(
-            "title",
-            "",
-        )
-    ).strip()
-
-    description = str(
-        activity.get(
-            "description",
-            "",
-        )
-    ).strip()
-
-    if not title or not description:
-        return {
-            **state,
-            "error": "Activity generation returned incomplete data.",
-        }
-
-    category = str(
-        activity.get(
-            "category",
-            "explore",
-        )
-    ).lower().strip()
-
-    allowed_categories = {
-        "learn",
-        "create",
-        "explore",
-        "move",
-        "connect",
-        "relax",
-    }
-
-    if category not in allowed_categories:
-        category = "explore"
-
-    try:
-
-        duration = int(
-            activity.get(
-                "duration_minutes",
-                30,
-            )
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
-
-        duration = 30
-
-    duration = max(
-        5,
-        min(duration, 240),
-    )
-
-    cleaned = {
-        "title": title[:200],
-        "description": description[:3000],
-        "category": category,
-        "duration_minutes": duration,
-        "reason": str(
-            activity.get(
-                "reason",
-                "",
-            )
-        ).strip()[:1000],
-    }
+    if not isinstance(result, dict):
+        raise ValueError("The AI service did not return a JSON object.")
 
     return {
         **state,
-        "activity": cleaned,
+        "intent": result.get("intent", "chat"),
+        "reply": result.get("reply", ""),
+        "reason": result.get("reason"),
+        "activity": result.get("activity"),
         "error": "",
     }
 
 
-# ============================================================
-# NODE 6 — SAVE ACTIVITY
-# ============================================================
+def validate_response_node(state: TouchGrassState):
+    intent = state.get("intent", "chat")
+    reply = state.get("reply")
+    reason = state.get("reason")
+    activity = state.get("activity")
 
-def save_activity_node(
-    state: TouchGrassState,
-    db: Session,
-) -> TouchGrassState:
+    if intent not in {"chat", "activity", "clarify"}:
+        intent = "chat"
 
-    if state.get("error"):
-        return state
+    if not isinstance(reply, str) or not reply.strip():
+        raise ValueError("The agent generated an empty reply.")
 
-    activity_data = state.get(
-        "activity",
-        {},
-    )
+    if intent == "activity":
+        if not isinstance(activity, dict):
+            raise ValueError("Activity intent requires an activity object.")
 
-    if not activity_data:
-        return {
-            **state,
-            "error": "No activity to save.",
+        title = activity.get("title")
+        description = activity.get("description")
+
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("The generated activity has no valid title.")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("The generated activity has no valid description.")
+
+        allowed_categories = {
+            "creativity", "outdoors", "learning", "fitness", "social",
+            "relaxation", "exploration", "food", "other",
         }
+        category = activity.get("category", "other")
+        if category not in allowed_categories:
+            category = "other"
 
-    activity = Activity(
-        user_id=state["user_id"],
-        title=activity_data["title"],
-        description=activity_data["description"],
-        category=activity_data["category"],
-        duration_minutes=(
-            activity_data["duration_minutes"]
-        ),
-        context=state.get(
-            "current_context",
-            {},
-        ),
-        status="suggested",
-    )
+        duration = activity.get("duration_minutes")
+        try:
+            duration = int(duration) if duration is not None else None
+        except (ValueError, TypeError):
+            duration = None
 
-    db.add(activity)
-    db.commit()
-    db.refresh(activity)
+        if duration is not None and duration <= 0:
+            duration = None
 
-    saved_activity = {
-        **activity_data,
-        "id": activity.id,
-    }
+        activity = {
+            "title": title.strip(),
+            "description": description.strip(),
+            "category": category,
+            "duration_minutes": duration,
+            "reason": activity.get("reason") or reason or "",
+        }
+    else:
+        activity = None
 
     return {
         **state,
-        "activity": saved_activity,
+        "intent": intent,
+        "reply": reply.strip(),
+        "reason": reason,
+        "activity": activity,
     }
 
 
-# ============================================================
-# BUILD GRAPH
-# ============================================================
+def persist_response_node(state: TouchGrassState, db: Session):
+    try:
+        saved_activity = None
+        activity_data = state.get("activity")
 
-def create_touchgrass_graph(
-    db: Session,
-):
+        if state.get("intent") == "activity" and activity_data:
+            record = Activity(
+                user_id=state["user_id"],
+                title=activity_data["title"],
+                description=activity_data["description"],
+                category=activity_data.get("category"),
+                duration_minutes=activity_data.get("duration_minutes"),
+                context={
+                    "reason": activity_data.get("reason"),
+                    "request": state.get("user_message", ""),
+                },
+                status="suggested",
+            )
+            db.add(record)
+            db.flush()
+            saved_activity = {**activity_data, "id": record.id}
 
-    graph = StateGraph(
-        TouchGrassState
-    )
-
-    graph.add_node(
-        "load_profile",
-        lambda state:
-            load_profile_node(
-                state,
-                db,
+        db.add_all([
+            ConversationMessage(
+                user_id=state["user_id"],
+                role="user",
+                content=state["user_message"],
             ),
-    )
-
-    graph.add_node(
-        "load_history",
-        lambda state:
-            load_history_node(
-                state,
-                db,
+            ConversationMessage(
+                user_id=state["user_id"],
+                role="assistant",
+                content=state["reply"],
             ),
-    )
+        ])
+        db.commit()
 
+        return {
+            **state,
+            "activity": saved_activity,
+            "error": "",
+        }
+    except Exception:
+        db.rollback()
+        raise
+
+
+def create_touchgrass_graph(db: Session):
+    graph = StateGraph(TouchGrassState)
+
+    graph.add_node("load_profile", lambda s: load_profile_node(s, db))
+    graph.add_node("load_conversation", lambda s: load_conversation_node(s, db))
     graph.add_node(
-        "build_context",
-        lambda state:
-            build_context_node(
-                state,
-                db,
-            ),
+        "load_activity_history",
+        lambda s: load_activity_history_node(s, db),
     )
+    graph.add_node("build_context", build_context_node)
+    graph.add_node("plan_tools", plan_tools_node)
+    graph.add_node("execute_tools", execute_tools_node)
+    graph.add_node("generate_response", generate_response_node)
+    graph.add_node("validate_response", validate_response_node)
+    graph.add_node("persist_response", lambda s: persist_response_node(s, db))
 
-    graph.add_node(
-        "generate_activity",
-        lambda state:
-            generate_activity_node(
-                state,
-                db,
-            ),
-    )
-
-    graph.add_node(
-        "validate_activity",
-        lambda state:
-            validate_activity_node(
-                state,
-                db,
-            ),
-    )
-
-    graph.add_node(
-        "save_activity",
-        lambda state:
-            save_activity_node(
-                state,
-                db,
-            ),
-    )
-
-    graph.add_edge(
-        START,
-        "load_profile",
-    )
-
-    graph.add_edge(
-        "load_profile",
-        "load_history",
-    )
-
-    graph.add_edge(
-        "load_history",
-        "build_context",
-    )
-
-    graph.add_edge(
-        "build_context",
-        "generate_activity",
-    )
-
-    graph.add_edge(
-        "generate_activity",
-        "validate_activity",
-    )
-
-    graph.add_edge(
-        "validate_activity",
-        "save_activity",
-    )
-
-    graph.add_edge(
-        "save_activity",
-        END,
-    )
+    graph.add_edge(START, "load_profile")
+    graph.add_edge("load_profile", "load_conversation")
+    graph.add_edge("load_conversation", "load_activity_history")
+    graph.add_edge("load_activity_history", "build_context")
+    graph.add_edge("build_context", "plan_tools")
+    graph.add_edge("plan_tools", "execute_tools")
+    graph.add_edge("execute_tools", "generate_response")
+    graph.add_edge("generate_response", "validate_response")
+    graph.add_edge("validate_response", "persist_response")
+    graph.add_edge("persist_response", END)
 
     return graph.compile()
 
-
-# ============================================================
-# RUN GRAPH
-# ============================================================
 
 def run_touchgrass_graph(
     user_id: int,
     user_message: str,
     db: Session,
     current_context: dict[str, Any] | None = None,
-):
+) -> dict[str, Any]:
+    message = user_message.strip()
+    if not message:
+        raise ValueError("The user message cannot be empty.")
 
     graph = create_touchgrass_graph(db)
-
     initial_state: TouchGrassState = {
         "user_id": user_id,
-        "user_message": user_message,
-        "current_context": (
-            current_context or {}
-        ),
+        "user_message": message,
+        "current_context": current_context or {},
     }
-
-    return graph.invoke(
-        initial_state
-    )
-
+    return graph.invoke(initial_state)

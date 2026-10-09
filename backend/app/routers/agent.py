@@ -12,7 +12,6 @@ from ..schemas import (
     AgentChatResponse,
 )
 
-
 router = APIRouter(
     prefix="/agent",
     tags=["Agent"],
@@ -24,10 +23,7 @@ security = HTTPBearer()
 def get_current_user_id(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> int:
-
-    user_id = verify_access_token(
-        credentials.credentials
-    )
+    user_id = verify_access_token(credentials.credentials)
 
     if user_id is None:
         raise HTTPException(
@@ -47,7 +43,6 @@ def agent_chat(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-
     context = {
         "latitude": payload.latitude,
         "longitude": payload.longitude,
@@ -55,7 +50,6 @@ def agent_chat(
     }
 
     try:
-
         result = run_touchgrass_graph(
             user_id=user_id,
             user_message=payload.message,
@@ -64,55 +58,49 @@ def agent_chat(
         )
 
     except Exception as exc:
-
         print("\n========== LANGGRAPH ERROR ==========")
-        print(type(exc).__name__)
-        print(str(exc))
+        print(type(exc).__name__, str(exc))
         print("=====================================\n")
 
         raise HTTPException(
             status_code=500,
-            detail=(
-                f"LangGraph failed: "
-                f"{type(exc).__name__}: {str(exc)}"
-            ),
-        )
+            detail=f"LangGraph failed: {type(exc).__name__}: {str(exc)}",
+        ) from exc
 
     if result.get("error"):
+        print("\n========== AGENT GRAPH ERROR ==========")
+        print(result["error"])
+        print("========================================\n")
 
         raise HTTPException(
             status_code=500,
-            detail=result["error"],
+            detail=str(result["error"]),
         )
 
     activity = result.get("activity")
-
-    if not activity:
-
-        raise HTTPException(
-            status_code=500,
-            detail="LangGraph did not produce an activity.",
-        )
-
-    response_activity = AgentActivity(
-        title=activity["title"],
-        description=activity["description"],
-        category=activity.get("category"),
-        duration_minutes=activity.get(
-            "duration_minutes"
-        ),
-        reason=activity.get("reason"),
+    intent = result.get("intent", "chat")
+    reply = result.get(
+        "reply",
+        "I'm here. What would you like to explore?",
     )
 
+    response_activity = None
+
+    if activity:
+        response_activity = AgentActivity(
+            title=activity["title"],
+            description=activity["description"],
+            category=activity.get("category"),
+            duration_minutes=activity.get("duration_minutes"),
+            reason=activity.get("reason"),
+        )
+
     return AgentChatResponse(
-        message=(
-            "Here's something personalized for you. "
-            "Put your phone away and give it a try."
-        ),
-        intent="activity_request",
-        activity_id=activity.get("id"),
+        message=reply,
+        intent=intent,
+        activity_id=activity.get("id") if activity else None,
         activity=response_activity,
-        reason=activity.get("reason"),
+        reason=result.get("reason"),
         weather=None,
         nearby_places=None,
     )

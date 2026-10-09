@@ -162,46 +162,66 @@ def extract_json(text: str) -> dict[str, Any]:
 # GENERIC GROQ CHAT
 # ============================================================
 
+
 def _chat_completion(
     system_prompt: str,
     user_prompt: str,
-    max_completion_tokens: int = 800,
+    max_completion_tokens: int = 1200,
     temperature: float = 0.2,
 ) -> str:
-
-    completion = client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
-        temperature=temperature,
-        max_completion_tokens=max_completion_tokens,
-        include_reasoning=False,
-    )
+    try:
+        completion = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+            temperature=temperature,
+            max_completion_tokens=max_completion_tokens,
+            include_reasoning=False,
+        )
+    except Exception as exc:
+        # Do not print the API key or request headers.
+        raise RuntimeError(
+            f"Groq API request failed: {type(exc).__name__}: {exc}"
+        ) from exc
 
     if not completion.choices:
         raise RuntimeError(
-            "Groq returned no completion choices."
+            f"Groq returned no choices. "
+            f"Model: {GROQ_MODEL}; "
+            f"finish_reason: {completion.choices}"
         )
 
-    message = completion.choices[0].message
-
+    choice = completion.choices[0]
+    message = choice.message
     content = message.content
 
-    if not content:
-        raise RuntimeError(
-            "Groq returned empty content."
-        )
+    if isinstance(content, str) and content.strip():
+        return content.strip()
 
-    return content.strip()
+    # Report diagnostic metadata without logging prompts or secrets.
+    reasoning = getattr(message, "reasoning", None)
+    finish_reason = getattr(choice, "finish_reason", None)
+    usage = getattr(completion, "usage", None)
+    completion_tokens = getattr(
+        usage, "completion_tokens", None
+    )
 
+    raise RuntimeError(
+        "Groq returned no usable text. "
+        f"Model: {GROQ_MODEL}; "
+        f"finish_reason: {finish_reason}; "
+        f"completion_tokens: {completion_tokens}; "
+        f"reasoning_present: {bool(reasoning)}. "
+        "Check the model response and token configuration."
+    )
 
 def generate_json(
     system_prompt: str,
