@@ -33,6 +33,7 @@ function SignIn() {
 
       localStorage.setItem("touchgrass_token", token);
 
+<<<<<<< HEAD
       // New users (no profile yet) go to profile discovery first.
       try {
         await api.get("/profile");
@@ -44,6 +45,9 @@ function SignIn() {
             : "/home"
         );
       }
+=======
+      navigate("/home");
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     } catch (error) {
       const message =
         error.response?.data?.detail ||

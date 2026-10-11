@@ -1,4 +1,5 @@
 
+<<<<<<< HEAD
 from datetime import datetime, timezone as dt_timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -154,6 +155,16 @@ def get_current_context(
         "location_shared": latitude is not None and longitude is not None,
         "city": city,
     }
+=======
+from typing import Any
+
+import httpx
+
+
+GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 
 def geocode_city(location: str) -> dict[str, Any] | None:
@@ -244,18 +255,27 @@ def get_weather(
             response.raise_for_status()
             data = response.json()
 
+<<<<<<< HEAD
         current = data.get("current", {})
         today = data.get("daily", {})
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
         return {
             "ok": True,
             "provider": "Open-Meteo",
             "location": resolved_name,
             "country": country,
+<<<<<<< HEAD
             "current": current,
             "today": today,
             "timezone": data.get("timezone"),
             **summarize_weather(current, today),
+=======
+            "current": data.get("current", {}),
+            "today": data.get("daily", {}),
+            "timezone": data.get("timezone"),
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
         }
 
     except (httpx.HTTPError, ValueError):
@@ -332,6 +352,7 @@ def search_nearby_places(
 
     query = "[out:json][timeout:15];(" + "".join(selectors) + ");out center tags 30;"
 
+<<<<<<< HEAD
     settings = get_settings()
     elements: list[dict[str, Any]] = []
     last_error = None
@@ -362,6 +383,19 @@ def search_nearby_places(
         }
 
     try:
+=======
+    try:
+        with httpx.Client(
+            timeout=20.0,
+            headers={"User-Agent": "TouchGrass/1.0 (real-world activity assistant)"},
+        ) as client:
+            response = client.post(
+                OVERPASS_URL,
+                data={"data": query},
+            )
+            response.raise_for_status()
+            elements = response.json().get("elements", [])
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
         places = []
         seen = set()
@@ -399,14 +433,18 @@ def search_nearby_places(
                         tags.get("addr:city"),
                     ] if value
                 ),
+<<<<<<< HEAD
                 "distance_m": _distance_m(
                     float(latitude), float(longitude), lat, lon
                 ),
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
                 "website": tags.get("website"),
                 "opening_hours": tags.get("opening_hours"),
                 "source": "OpenStreetMap",
             })
 
+<<<<<<< HEAD
         places.sort(
             key=lambda place: (
                 place["distance_m"] is None,
@@ -414,6 +452,8 @@ def search_nearby_places(
             )
         )
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
         return {
             "ok": True,
             "provider": "OpenStreetMap/Overpass",

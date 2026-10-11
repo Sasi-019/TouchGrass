@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -38,12 +39,38 @@ def hash_password(password: str) -> str:
         password_bytes,
         bcrypt.gensalt(),
     ).decode("utf-8")
+=======
+import os
+from datetime import datetime, timedelta, timezone
+
+from dotenv import load_dotenv
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+
+
+load_dotenv()
+
+
+# ============================================================
+# PASSWORD HASHING
+# ============================================================
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto",
+)
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 
 def verify_password(
     plain_password: str,
     hashed_password: str,
 ) -> bool:
+<<<<<<< HEAD
     password_bytes = plain_password.encode("utf-8")
 
     if len(password_bytes) > MAX_PASSWORD_BYTES:
@@ -67,6 +94,43 @@ JWT_SECRET = settings.jwt_secret
 JWT_ALGORITHM = settings.jwt_algorithm
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
 
+=======
+    return pwd_context.verify(
+        plain_password,
+        hashed_password,
+    )
+
+
+# ============================================================
+# JWT CONFIGURATION
+# ============================================================
+
+JWT_SECRET = os.getenv("JWT_SECRET")
+
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET is not set. "
+        "Add JWT_SECRET to backend/.env"
+    )
+
+
+JWT_ALGORITHM = os.getenv(
+    "JWT_ALGORITHM",
+    "HS256",
+)
+
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv(
+        "ACCESS_TOKEN_EXPIRE_MINUTES",
+        "30",
+    )
+)
+
+
+# ============================================================
+# CREATE ACCESS TOKEN
+# ============================================================
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 def create_access_token(user_id: int) -> str:
     """
@@ -75,6 +139,7 @@ def create_access_token(user_id: int) -> str:
 
     expire = (
         datetime.now(timezone.utc)
+<<<<<<< HEAD
         + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
 
@@ -83,15 +148,46 @@ def create_access_token(user_id: int) -> str:
             "sub": str(user_id),
             "exp": expire,
         },
+=======
+        + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+    )
+
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+    }
+
+    return jwt.encode(
+        payload,
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
         JWT_SECRET,
         algorithm=JWT_ALGORITHM,
     )
 
 
+<<<<<<< HEAD
 def verify_access_token(token: str) -> int | None:
     """
     Validate a JWT and return the user ID, or None when the
     token is invalid, expired, or has no user ID.
+=======
+# ============================================================
+# VERIFY ACCESS TOKEN
+# ============================================================
+
+def verify_access_token(
+    token: str,
+) -> int | None:
+    """
+    Validate a JWT and return the user ID.
+
+    Returns None when:
+    - token is invalid
+    - token is expired
+    - user ID is missing
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     """
 
     try:
@@ -108,6 +204,7 @@ def verify_access_token(token: str) -> int | None:
 
         return int(user_id)
 
+<<<<<<< HEAD
     except (JWTError, ValueError, TypeError):
         return None
 
@@ -163,3 +260,11 @@ def get_current_user_id(
         )
 
     return user_id
+=======
+    except (
+        JWTError,
+        ValueError,
+        TypeError,
+    ):
+        return None  
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191

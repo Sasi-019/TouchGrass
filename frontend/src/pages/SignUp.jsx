@@ -30,6 +30,7 @@ function SignUp() {
     try {
       await api.post("/auth/register", formData);
 
+<<<<<<< HEAD
       // Sign the new user straight in so they land on profile discovery
       // (Sign Up -> Profile Discovery) instead of a second login screen.
       try {
@@ -48,6 +49,11 @@ function SignUp() {
         // Account exists; fall back to the normal sign-in page.
         navigate("/signin");
       }
+=======
+      alert("Account created successfully!");
+
+      navigate("/signin");
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     } catch (error) {
       const message =
         error.response?.data?.detail ||

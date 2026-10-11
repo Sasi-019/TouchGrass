@@ -1,9 +1,19 @@
+<<<<<<< HEAD
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..auth import get_current_user_id
 from ..database import get_db
 from ..memory_service import apply_feedback_to_profile
+=======
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from ..auth import verify_access_token
+from ..database import get_db
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 from ..models import Activity, ActivityFeedback
 from ..schemas import (
     ActivityCreate,
@@ -17,6 +27,7 @@ router = APIRouter(
     tags=["Activities"],
 )
 
+<<<<<<< HEAD
 
 def _normalize_completed(value: str | None) -> str | None:
     """Store a small, consistent vocabulary: completed / skipped."""
@@ -33,6 +44,23 @@ def _normalize_completed(value: str | None) -> str | None:
         return "skipped"
 
     return value[:30] or None
+=======
+security = HTTPBearer()
+
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    user_id = verify_access_token(credentials.credentials)
+
+    if user_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token.",
+        )
+
+    return user_id
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 
 @router.post(
@@ -69,6 +97,7 @@ def get_activities(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
+<<<<<<< HEAD
     """Activity history, newest first."""
 
     return (
@@ -78,6 +107,17 @@ def get_activities(
         .all()
     )
 
+=======
+    activities = (
+        db.query(Activity)
+        .filter(Activity.user_id == user_id)
+        .order_by(Activity.created_at.desc())
+        .all()
+    )
+
+    return activities
+
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 @router.get(
     "/{activity_id}",
@@ -116,7 +156,10 @@ def submit_feedback(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
+<<<<<<< HEAD
     # Users can only give feedback on their own activities.
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     activity = (
         db.query(Activity)
         .filter(
@@ -132,23 +175,36 @@ def submit_feedback(
             detail="Activity not found.",
         )
 
+<<<<<<< HEAD
     completed = _normalize_completed(feedback_data.completed)
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     feedback = ActivityFeedback(
         activity_id=activity_id,
         user_id=user_id,
         rating=feedback_data.rating,
+<<<<<<< HEAD
         completed=completed,
         comment=feedback_data.comment,
     )
 
     if completed:
         activity.status = completed
+=======
+        completed=feedback_data.completed,
+        comment=feedback_data.comment,
+    )
+
+    if feedback_data.completed:
+        activity.status = feedback_data.completed
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
     db.add(feedback)
     db.commit()
     db.refresh(feedback)
 
+<<<<<<< HEAD
     # Learn from it. Best effort: feedback is already saved above, and this
     # call never raises.
     note = apply_feedback_to_profile(
@@ -169,3 +225,6 @@ def submit_feedback(
         comment=feedback.comment,
         memory_note=note,
     )
+=======
+    return feedback
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191

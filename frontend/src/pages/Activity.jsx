@@ -13,12 +13,16 @@ function Activity() {
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+<<<<<<< HEAD
   const [memoryNote, setMemoryNote] = useState("");
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
   const [error, setError] = useState("");
 
   useEffect(() => {
     const fetchActivity = async () => {
       try {
+<<<<<<< HEAD
         const response = await api.get(`/activities/${id}`);
 
         setActivity(response.data);
@@ -29,6 +33,22 @@ function Activity() {
             ? "Activity not found."
             : "Unable to load this activity."
         );
+=======
+        const response = await api.get("/activities");
+        const foundActivity = response.data.find(
+          (item) => item.id === Number(id)
+        );
+
+        if (!foundActivity) {
+          setError("Activity not found.");
+          return;
+        }
+
+        setActivity(foundActivity);
+      } catch (err) {
+        console.error(err);
+        setError("Unable to load this activity.");
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
       } finally {
         setLoading(false);
       }
@@ -37,13 +57,22 @@ function Activity() {
     fetchActivity();
   }, [id]);
 
+<<<<<<< HEAD
   const submitFeedback = async (didIt = true) => {
     if (didIt && !completed) {
+=======
+  const submitFeedback = async () => {
+    if (!completed) {
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
       setError("Please mark the activity as completed first.");
       return;
     }
 
+<<<<<<< HEAD
     if (didIt && rating === 0) {
+=======
+    if (rating === 0) {
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
       setError("Please give the activity a rating.");
       return;
     }
@@ -52,6 +81,7 @@ function Activity() {
       setSubmitting(true);
       setError("");
 
+<<<<<<< HEAD
       const response = await api.post(`/activities/${id}/feedback`, {
         rating: didIt ? rating : null,
         completed: didIt ? "yes" : "no",
@@ -66,6 +96,18 @@ function Activity() {
         err.response?.data?.detail ||
           "Unable to save your feedback."
       );
+=======
+      await api.post(`/activities/${id}/feedback`, {
+        rating,
+        completed: "yes",
+        comment,
+      });
+
+      setSuccess(true);
+    } catch (err) {
+      console.error(err);
+      setError("Unable to save your feedback.");
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     } finally {
       setSubmitting(false);
     }
@@ -114,6 +156,7 @@ function Activity() {
             Your feedback will help TouchGrass understand what you enjoy.
           </p>
 
+<<<<<<< HEAD
           {memoryNote && (
             <p className="mx-auto mt-6 max-w-xl rounded-2xl bg-white p-5 text-left text-[#31572c] shadow-sm">
               <span className="block text-sm font-semibold uppercase tracking-widest text-[#6a994e]">
@@ -123,6 +166,8 @@ function Activity() {
             </p>
           )}
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
           <button
             onClick={() => navigate("/home")}
             className="mt-8 rounded-xl bg-[#31572c] px-6 py-3 font-medium text-white hover:bg-[#264523]"
@@ -183,6 +228,7 @@ function Activity() {
             </label>
           </div>
 
+<<<<<<< HEAD
           {!completed && (
             <button
               onClick={() => submitFeedback(false)}
@@ -197,6 +243,8 @@ function Activity() {
             <p className="mt-4 text-sm text-red-600">{error}</p>
           )}
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
           {completed && (
             <div className="mt-10 border-t border-[#e5eee1] pt-8">
 
@@ -251,7 +299,11 @@ function Activity() {
               )}
 
               <button
+<<<<<<< HEAD
                 onClick={() => submitFeedback(true)}
+=======
+                onClick={submitFeedback}
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
                 disabled={submitting}
                 className="mt-6 rounded-xl bg-[#31572c] px-6 py-3 font-medium text-white transition hover:bg-[#264523] disabled:cursor-not-allowed disabled:opacity-60"
               >

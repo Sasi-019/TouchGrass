@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,21 +9,55 @@ from ..ai_service import AIServiceError
 from ..auth import get_current_user_id
 from ..database import get_db
 from ..models import Activity, ConversationMessage
+=======
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session
+
+from ..agent_graph import run_touchgrass_graph
+from ..auth import verify_access_token
+from ..database import get_db
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 from ..schemas import (
     AgentActivity,
     AgentChatRequest,
     AgentChatResponse,
+<<<<<<< HEAD
     ChatHistoryActivity,
     ChatHistoryMessage,
 )
 
 logger = logging.getLogger("touchgrass.agent")
 
+=======
+)
+
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 router = APIRouter(
     prefix="/agent",
     tags=["Agent"],
 )
 
+<<<<<<< HEAD
+=======
+security = HTTPBearer()
+
+
+def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> int:
+    user_id = verify_access_token(credentials.credentials)
+
+    if user_id is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token.",
+        )
+
+    return user_id
+
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 @router.post(
     "/chat",
@@ -33,12 +68,18 @@ def agent_chat(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
+<<<<<<< HEAD
     # Location is optional. When the user has not granted it the agent
     # still works; it just can't check weather or nearby places by itself.
     context = {
         "latitude": payload.latitude,
         "longitude": payload.longitude,
         "timezone": payload.timezone,
+=======
+    context = {
+        "latitude": payload.latitude,
+        "longitude": payload.longitude,
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
         "voice_enabled": payload.voice_enabled,
     }
 
@@ -50,6 +91,7 @@ def agent_chat(
             current_context=context,
         )
 
+<<<<<<< HEAD
     except AIServiceError as exc:
         logger.warning("AI service error: %s", exc)
 
@@ -76,6 +118,34 @@ def agent_chat(
         ) from exc
 
     activity = result.get("activity")
+=======
+    except Exception as exc:
+        print("\n========== LANGGRAPH ERROR ==========")
+        print(type(exc).__name__, str(exc))
+        print("=====================================\n")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"LangGraph failed: {type(exc).__name__}: {str(exc)}",
+        ) from exc
+
+    if result.get("error"):
+        print("\n========== AGENT GRAPH ERROR ==========")
+        print(result["error"])
+        print("========================================\n")
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(result["error"]),
+        )
+
+    activity = result.get("activity")
+    intent = result.get("intent", "chat")
+    reply = result.get(
+        "reply",
+        "I'm here. What would you like to explore?",
+    )
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
     response_activity = None
 
@@ -86,6 +156,7 @@ def agent_chat(
             category=activity.get("category"),
             duration_minutes=activity.get("duration_minutes"),
             reason=activity.get("reason"),
+<<<<<<< HEAD
             location_type=activity.get("location_type"),
             difficulty=activity.get("difficulty"),
             related_interests=activity.get("related_interests"),
@@ -179,3 +250,17 @@ def clear_chat_history(
     db.commit()
 
     return {"message": "Conversation cleared.", "deleted": deleted}
+=======
+        )
+
+    return AgentChatResponse(
+        message=reply,
+        intent=intent,
+        activity_id=activity.get("id") if activity else None,
+        activity=response_activity,
+        reason=result.get("reason"),
+        weather=None,
+        nearby_places=None,
+    )
+
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191

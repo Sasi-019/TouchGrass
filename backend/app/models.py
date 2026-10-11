@@ -101,6 +101,7 @@ class UserProfile(Base):
         nullable=False,
     )
 
+<<<<<<< HEAD
     # Short notes the agent writes after feedback, newest last, e.g.
     # {"date": "2026-10-09", "activity": "Nature Texture Hunt",
     #  "rating": 5, "note": "Enjoys close-up observation of plants."}
@@ -110,6 +111,8 @@ class UserProfile(Base):
         nullable=True,
     )
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 class Activity(Base):
     __tablename__ = "activities"
@@ -241,6 +244,7 @@ class ConversationMessage(Base):
         nullable=False,
     )
 
+<<<<<<< HEAD
     # The challenge this reply produced (if any), so the chat can show the
     # activity card again after a reload. Nullable => added automatically to
     # existing databases by init_db().
@@ -250,6 +254,8 @@ class ConversationMessage(Base):
         nullable=True,
     )
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),

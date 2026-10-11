@@ -112,6 +112,7 @@ export const chatWithAgent = async (data) => {
   return response.data;
 };
 
+<<<<<<< HEAD
 // Previous messages (oldest first), so the chat survives reloads.
 export const getChatHistory = async (limit = 60) => {
   const response = await api.get("/agent/history", {
@@ -126,6 +127,8 @@ export const clearChatHistory = async () => {
   return response.data;
 };
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 // -----------------------------
 // Voice
 // -----------------------------

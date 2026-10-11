@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import logging
 
 from sqlalchemy import create_engine, inspect, text
@@ -24,11 +25,32 @@ _engine_options = {
 if settings.is_sqlite:
     # SQLite is only used by the automated tests.
     _engine_options["connect_args"] = {"check_same_thread": False}
+=======
+import os
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+
+load_dotenv()
+
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set")
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 
 engine = create_engine(
     DATABASE_URL,
+<<<<<<< HEAD
     **_engine_options,
+=======
+    echo=False,
+    pool_pre_ping=True,
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 )
 
 
@@ -56,12 +78,18 @@ def init_db():
     Create missing tables and safely add columns introduced
     by newer versions of TouchGrass.
 
+<<<<<<< HEAD
     This is intentionally lightweight (no Alembic needed for the MVP).
     It only ever ADDS columns; it never drops or rewrites data.
     """
 
     from . import models  # noqa: F401  (registers every table on Base)
 
+=======
+    This is intentionally lightweight for local development.
+    """
+
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
     # Create tables that don't exist yet.
     Base.metadata.create_all(bind=engine)
 
@@ -126,6 +154,7 @@ def init_db():
                     )
                 )
 
+<<<<<<< HEAD
     # ---------------------------------------------------------
     # Any other NEW nullable column declared in models.py
     # (e.g. user_profiles.learned_notes) is added automatically,
@@ -163,6 +192,8 @@ def init_db():
                 column.name,
             )
 
+=======
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
 
 def check_database_connection():
     """
@@ -176,4 +207,8 @@ def check_database_connection():
         return True
 
     except Exception:
+<<<<<<< HEAD
         return False
+=======
+        return False
+>>>>>>> 086f3d78cf4b16b3a4c49d79dcb806f55d124191
